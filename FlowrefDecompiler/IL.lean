@@ -465,4 +465,14 @@ theorem addLoop_correct (n : Nat) (x : Word) : addLoop n x = x + BitVec.ofNat 32
   | zero => simp [addLoop]
   | succ k ih => rw [addLoop, ih]; bv_omega
 
+/-- Render-correctness for the loop, via its **closed form**: a decompiler may
+strength-reduce `for(i<n) x+=1` to `x + n`, and the emitted Slang `(a0 + a1)`
+provably equals the loop for **all** trip counts. This composes the induction
+proof (`addLoop_correct`) with the expression render — the loop's meaning,
+rendered to Slang, machine-checked end to end. -/
+theorem addLoop_render (x n : Word) :
+    (p_add.render).evalU32 (env2 x n) = some (addLoop n.toNat x) := by
+  have h : addLoop n.toNat x = x + n := by rw [addLoop_correct]; bv_omega
+  rw [h]; simp +decide [p_add, env2]
+
 end FlowrefDecompiler.IL
