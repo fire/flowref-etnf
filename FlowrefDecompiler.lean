@@ -633,7 +633,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- reaching-def search is cmov-aware for cmp operands too.
   let cmovCount := (insns.filter (fun i => i.mn.startsWith "cmov")).size
   let allModeled := a != .x86 ∨
-    (insns.all (fun i => modeledX86 i.mn) ∧ cmovsHaveCmp ∧ cmovCount ≤ 1)
+    (insns.all (fun i => modeledX86 i.mn) ∧ cmovsHaveCmp ∧ cmovCount ≤ 2)
   let faithful := nB == 1 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧ allModeled
   let mut out : String := cPreamble
   out := out ++ s!"\n/* flowref decompile @ 0x{hex fnVa} — {nI} insns, {nB} blocks, {defSites.size} SSA defs\n"
