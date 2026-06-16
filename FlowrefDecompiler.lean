@@ -604,16 +604,26 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- (setcc*, div, unknown …). `cmp` + a supported conditional move are modeled as
   -- a `(X op Y) ? src : dst` ternary (see `cmovRhs`); `test` is flag-only and
   -- dead unless consumed, so it is allowed too. Found by decompile-bench/algo-bench.sh.
+  -- NOTE: `neg`/`not` are deliberately EXCLUDED. The shared disassembler's
+  -- `writesReg` does not list them, so a `neg eax` is not recognised as an SSA
+  -- def and the value silently reads the previous (often uninitialised) version
+  -- — wrong C under a "faithful" banner. Refuse until they are modeled as defs.
   let modeledX86 : String → Bool := fun mn =>
     ["mov", "movsxd", "movzx", "movsx", "lea", "add", "sub", "and", "or", "xor",
-     "shl", "sal", "shr", "sar", "imul", "neg", "not", "inc", "dec",
+     "shl", "sal", "shr", "sar", "imul", "inc", "dec",
      "ret", "nop", "endbr64", "cmp", "test"].contains mn ∨ (cmovCondOp mn).isSome
   -- A conditional move is faithful ONLY if it has a preceding `cmp` to source its
   -- condition; otherwise refuse (cmovRhs would have no condition).
   let cmovsHaveCmp := (Array.range nI).all (fun q =>
     ¬ insns[q]!.mn.startsWith "cmov" ∨
       ((List.range q).any (fun k => insns[k]!.mn == "cmp")))
-  let allModeled := a != .x86 ∨ (insns.all (fun i => modeledX86 i.mn) ∧ cmovsHaveCmp)
+  -- At most ONE cmov: with two cmovs (clamp, max3) the first cmov's result feeds
+  -- the second `cmp`, but `cmovRhs` resolves that operand via the cmov-blind
+  -- reaching-def and picks the wrong SSA value. Refuse multi-cmov until the
+  -- reaching-def search is cmov-aware for cmp operands too.
+  let cmovCount := (insns.filter (fun i => i.mn.startsWith "cmov")).size
+  let allModeled := a != .x86 ∨
+    (insns.all (fun i => modeledX86 i.mn) ∧ cmovsHaveCmp ∧ cmovCount ≤ 1)
   let faithful := nB == 1 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧ allModeled
   let mut out : String := cPreamble
   out := out ++ s!"\n/* flowref decompile @ 0x{hex fnVa} — {nI} insns, {nB} blocks, {defSites.size} SSA defs\n"

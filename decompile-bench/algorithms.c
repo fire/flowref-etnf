@@ -39,5 +39,21 @@ uint32_t pow_uint(uint32_t base, uint32_t exp) { uint32_t r = 1; while (exp) { i
 uint32_t is_prime(uint32_t n)          { if (n < 2u) return 0; for (uint32_t i = 2; i * i <= n; i++) if (n % i == 0u) return 0; return 1; }
 uint32_t collatz_steps(uint32_t n)     { uint32_t s = 0; while (n > 1u) { n = (n & 1u) ? 3u * n + 1u : n >> 1; s++; } return s; }
 
+/* ---- more branchless leaves: bit tricks (no flags) + multi-cmov ---- */
+uint32_t isolate_lowest_bit(uint32_t x) { return x & (0u - x); }   /* x & -x */
+uint32_t clear_lowest_bit(uint32_t x)   { return x & (x - 1u); }
+uint32_t clamp(uint32_t x, uint32_t lo, uint32_t hi) {             /* min(max(x,lo),hi) — two cmov */
+  uint32_t a = x < lo ? lo : x;
+  return a < hi ? a : hi;
+}
+uint32_t max3(uint32_t a, uint32_t b, uint32_t c) {                /* two cmov */
+  uint32_t m = a < b ? b : a;
+  return m < c ? c : m;
+}
+uint32_t sat_add(uint32_t a, uint32_t b) {                         /* carry → cmov */
+  uint32_t s = a + b;
+  return s < a ? 0xffffffffu : s;
+}
+
 /* ---- calls another function ---- */
 uint32_t lcm(uint32_t a, uint32_t b)   { return a / gcd(a, b) * b; }

@@ -20,6 +20,7 @@ read TVMA TOFF < <(readelf -SW "$obj" | awk '/[ \t]\.text[ \t]/{for(i=1;i<=NF;i+
 
 # Every function in algorithms.c (keep in sync with the source).
 FUNCS="id32 add2 umax umin abs_diff gray_code avg_floor \
+       isolate_lowest_bit clear_lowest_bit clamp max3 sat_add \
        sum_to_n factorial fib_iter popcount log2_floor reverse_bits \
        gcd isqrt pow_uint is_prime collatz_steps lcm"
 
