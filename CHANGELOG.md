@@ -26,8 +26,9 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   decode → CFG/reaching-defs/params → emit+gate → `flowref-equiv` oracle. See the
   `flowref-mvp` skill for the load-bearing core.
 - **Modeled & proven leaf/flag/select class is saturated** (every single-block
-  function in the bench proven). Strict **41/57 EQUIVALENT, 0 violations**, UNSAFE
-  57/57 compile. Modeled: ALU, neg/not, movzx/movsx (both signs), variable shifts,
+  function in the bench proven), and the first compact branch-diamond return-select
+  bridge is now strict. Strict **42/58 EQUIVALENT, 0 violations**, UNSAFE
+  58/58 compile. Modeled: ALU, neg/not, movzx/movsx (both signs), variable shifts,
   scaled+displaced `lea`, 1/2/3-operand `imul`, register-width aliasing (canonReg),
   cmp+cmov chains of any length, add/sub-carry (CF) cmov, test-ZF cmov, and `setcc`
   (the comparison-returning class). Flag conditions share one `condFromFlags` helper
@@ -65,3 +66,9 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
 - Oracle sampler blind spot (above) → boundary battery.
 - `movzx`/`movsx` of a sub-register lifted as a plain copy (dropped truncation/sign)
   → modeled by source width.
+- Tiny x86 branch targets printed as bare decimal digits (`jb 9`) were invisible to
+  the dependency's `branchTarget`, so compact diamonds were mis-carved as straight
+  blocks. `btX`/`cbtX` now parse the bare-digit case for CFG recovery, and the
+  first branch→select strict bridge lowers a three-block return diamond to a ternary.
+- x86 branch predicates now distinguish signed (`jl`/`jle`/`jg`/`jge`) from
+  unsigned (`jb`/`jbe`/`ja`/`jae`) comparisons when emitting C predicates.

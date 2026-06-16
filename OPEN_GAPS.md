@@ -9,19 +9,16 @@ The leaf/flag/select/forwarding-call class is saturated, so the old "raise stric
 count on leaves" is essentially exhausted. Control flow / memory / calls hold the
 remaining value. Current order, highest first:
 
-1. **Branch→select lifting in production (NEW #1).**
-   The gateway to the largest refused class. Reuse the plausible witness DAG: the
-   φ case (a use with multiple reaching defs across a 2-way conditional) already
-   lowers to an opaque `r_phi` local in `useToVer` (FlowrefDecompiler.lean, the
-   `many` branch). Convert that φ into `predOf ? def_then : def_else` — `predOf`
-   already builds the branch condition and `condBlocks` already identifies the
-   2-way conditional. **Next decisive action:** match each reaching def to its
-   branch direction (taken vs fallthrough), relax the `nB == 1` gate to accept a
-   reducible reconverging diamond with pure arms, emit the merge as a select, and
-   let the oracle prove it before widening the gate.
-   Open sub-problem: getting a real branch *test case* — gcc emits `cmov` for pure
-   value-selects even with `-fno-if-conversion` (see TOMBSTONES); need `-O0` or an
-   arm the backend cannot cmov.
+1. **Broaden branch→select lifting beyond the first return diamond.**
+   The first strict bridge is done: a compact 3-block forward branch diamond that
+   only selects the return register now lowers to a ternary and proves in the
+   oracle (`branch_select`). The remaining gateway is the general φ case: a use
+   with multiple reaching defs across a 2-way conditional still lowers to an opaque
+   `r_phi` local in `useToVer` (FlowrefDecompiler.lean, the `many` branch).
+   **Next decisive action:** match each reaching def to its branch direction
+   (taken vs fallthrough) for a reconverging diamond whose merge use is not just
+   `ret`, emit `predOf ? def_then : def_else`, then widen the faithful gate only
+   after the oracle proves the new bench case.
 
 2. **Single-block memory in production.** Loads/stores for register+memory leaves.
    The IL already proves load/store/aliasing on real bytes; no CFG work needed —

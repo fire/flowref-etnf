@@ -337,7 +337,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- single reaching def we wire the return to it (so `return 7;` survives);
   -- with zero or several (a φ across paths) we conservatively fall back to the
   -- base local. This is what makes simple functions provably equivalent.
-  let retName := fun (q : Nat) =>
+  let retNameBase := fun (q : Nat) =>
     -- For a single-block leaf the return value is the last definition of the
     -- return register in program order. We use `defSites` (which, via
     -- `writesRegX`, includes cmov defs the dep's reaching-def omits — otherwise a
@@ -407,7 +407,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         m := m.insert nm (j :: (m.get? nm).getD [])
       -- a `ret` consumes the return register's reaching def (wired by `retName`).
       if (insns[j]!.mn.startsWith "ret" ∨ insns[j]!.mn == "blr") then
-        let rn := retName j
+        let rn := retNameBase j
         m := m.insert rn (j :: (m.get? rn).getD [])
     pure m
   let inlineDef : Std.HashSet String := Id.run do
@@ -475,10 +475,48 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
               else if ins.mn == "jg" ∨ ins.mn == "ja" then ">"
               else if ins.mn == "jge" ∨ ins.mn == "jae" then ">="
               else "!="
-            s!"((int32_t)({lx}) {op} (int32_t)({ly}))"
+            -- x86 has signed (`jl`/`jle`/`jg`/`jge`) and unsigned
+            -- (`jb`/`jbe`/`ja`/`jae`) condition families.  Keep the unsigned
+            -- branch predicates unsigned; only signed branches get int32 casts.
+            if ["jl", "jle", "jg", "jge"].contains ins.mn then
+              s!"((int32_t)({lx}) {op} (int32_t)({ly}))"
+            else s!"(({lx}) {op} ({ly}))"
         | _ => "1 /* unknown predicate */"
       | none => "1 /* flag-based predicate unknown */"
     applyCdecl pred
+
+  -- Strict bridge for the first multi-block class: a compact forward diamond that
+  -- is semantically just a value select in the return register.  Shape:
+  --   Bc:   retReg := takenValue; cmp ...; jcc Bret
+  --   Bf:   retReg := fallthroughValue
+  --   Bret: ret
+  -- This is the branch form of the already-proven `cmov` select class; the oracle
+  -- still has final authority before the bench records it as EQUIVALENT.
+  let latestDefNameIn := fun (lo hi : Nat) =>
+    (defSites.filter (fun p => canonReg p.2 == canonReg retReg ∧ lo ≤ p.1 ∧ p.1 < hi)).back?.map
+      (fun (di, _) => cName ((ssaName.get? di).getD retReg))
+  let simpleDiamondRetExpr : Nat → Option String := fun (q : Nat) =>
+    if a == .x86 ∧ nB == 3 ∧ condBlocks.length == 1 then
+      let cb := condBlocks.headD 0
+      let rb := idx2blk[q]!
+      let cbb := blocks[cb]!
+      match condTgtBlk cb with
+      | some takenB =>
+        let fallB := cbb.succ.find? (fun s => s != takenB)
+        match fallB with
+        | some fb =>
+          let fbb := blocks[fb]!
+          if takenB == rb ∧ fbb.succ == [rb] then
+            match latestDefNameIn cbb.lo (cbb.hi - 1), latestDefNameIn fbb.lo fbb.hi with
+            | some takenV, some fallV => some s!"(({predOf cb}) ? ({takenV}) : ({fallV}))"
+            | _, _ => none
+          else none
+        | none => none
+      | none => none
+    else none
+
+  let retName := fun (q : Nat) =>
+    (simpleDiamondRetExpr q).getD (retNameBase q)
 
   -- One non-terminator instruction → its C statement (or `none` to omit).
   -- Substitute an operand token: pass literals through; map a register to its
@@ -716,13 +754,24 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- (`cmovsModeled`); chains of any length lift soundly (e.g. med3 = 4 cmovs).
   let allModeled := a != .x86 ∨
     (insns.all (fun i => modeledX86 i.mn) ∧ cmovsModeled ∧ setccModeled)
-  let faithful := nB == 1 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧ allModeled
+  -- First faithful multi-block bridge: a 3-block branch diamond whose only
+  -- control-flow effect is selecting the returned register value.  Conditional
+  -- branch mnemonics are allowed here only because `simpleDiamondRetExpr` lowers
+  -- the merge to an explicit ternary and the oracle checks the whole function.
+  let branchSelectFaithful := a == .x86 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧
+    (insns.all (fun i => modeledX86 i.mn ∨ (cbtX i).isSome)) ∧ cmovsModeled ∧ setccModeled ∧
+    (Array.range nI).any (fun q =>
+      (insns[q]!.mn.startsWith "ret" ∨ insns[q]!.mn == "blr") ∧ (simpleDiamondRetExpr q).isSome)
+  let faithful := (nB == 1 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧ allModeled) ∨ branchSelectFaithful
   let mut out : String := cPreamble
   out := out ++ s!"\n/* flowref decompile @ 0x{hex fnVa} — {nI} insns, {nB} blocks, {defSites.size} SSA defs\n"
   out := out ++ s!"   loops (plausible back-edge: {loopRes.isFailure}): {loopHeaders}; conditionals: {condBlocks}\n"
   out := out ++ s!"   calling convention: {repr pm.conv}, recovered params: {pm.count}\n"
   if faithful then
-    out := out ++ "   equivalence: faithful lift (straight-line register-only leaf) — provable by decompile-bench/equiv.sh */\n\n"
+    if branchSelectFaithful then
+      out := out ++ "   equivalence: faithful lift (branch-select return diamond) — provable by decompile-bench/equiv.sh */\n\n"
+    else
+      out := out ++ "   equivalence: faithful lift (straight-line register-only leaf) — provable by decompile-bench/equiv.sh */\n\n"
   else
     out := out ++ "   equivalence: NOT faithful — outside the liftable class (control flow / memory / calls); do not trust */\n\n"
   for t in calledSubs.toList do
