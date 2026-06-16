@@ -621,4 +621,34 @@ theorem double_call_render (ce : CallEnv) (x : Word) :
              Op.apply, List.map_cons, List.map_nil, List.getD_cons_zero, List.getD_cons_succ,
              List.nil_append, List.cons_append, if_true, if_false]
 
+/-! ## First real Decompile-Bench function through the proof path.
+
+Everything above is synthetic. This is an actual function from the
+`LLM4Binary/decompile-bench` corpus — `BlockDevice::Lock()`, whose real
+disassembly (from the corpus `asm` column) is:
+
+```
+    movb $0x1, %al
+    retq
+```
+
+i.e. it loads the constant `1` into the return register and returns. Lifted to
+the IL it is "return 1"; we prove the recovered value (spec) and that the
+emitted Slang agrees. The lift here is transcribed by hand from the real asm —
+the automated `Flowref.Disasm.Ins → Prog` bridge (the corpus harness) is the
+remaining infrastructure, but the *proof path itself* now demonstrably handles a
+real corpus function, not just hand-built demos. -/
+
+/-- `BlockDevice::Lock()` lifted: `movb $0x1, %al; ret` ⇒ returns `1`. -/
+def blockdevice_lock : Prog := { binds := [], ret := imm 1 }
+
+/-- The recovered value matches the function's behaviour: it returns `1`. -/
+theorem blockdevice_lock_correct : blockdevice_lock.eval [] = 1 := by
+  simp [blockdevice_lock, Prog.eval, evalGo]
+
+/-- render-correctness on the real function: the emitted Slang returns `1` too. -/
+theorem blockdevice_lock_render :
+    (blockdevice_lock.render).evalU32 (fun _ => 0) = some (blockdevice_lock.eval []) := by
+  simp [blockdevice_lock, Prog.eval, evalGo]
+
 end FlowrefDecompiler.IL
