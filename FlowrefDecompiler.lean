@@ -196,6 +196,25 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
                                ∧ ¬ (firstTok i).any (· == '[')
                           then some (firstTok i) else none
                 | _    => none
+  -- Canonical register key: collapse the width aliases of one physical GPR
+  -- (`rdx`/`edx`/`dx`/`dl` → `edx`) so a def written as `edx` is found by a later
+  -- read spelled `rdx` (e.g. `lea (%rdx,%rdi)` after `add %esi,%edx`). SSA names
+  -- keep their ORIGINAL width (so the declared C type stays correct); only
+  -- def/use MATCHING is done on this key. Found by combine4 in algo-bench.sh.
+  let regAliasGroups : List (List String) :=
+    [ ["rax","eax","ax","al"], ["rbx","ebx","bx","bl"],
+      ["rcx","ecx","cx","cl"], ["rdx","edx","dx","dl"],
+      ["rsi","esi","si","sil"], ["rdi","edi","di","dil"],
+      ["rbp","ebp","bp","bpl"], ["rsp","esp","sp","spl"],
+      ["r8","r8d","r8w","r8b"], ["r9","r9d","r9w","r9b"],
+      ["r10","r10d","r10w","r10b"], ["r11","r11d","r11w","r11b"],
+      ["r12","r12d","r12w","r12b"], ["r13","r13d","r13w","r13b"],
+      ["r14","r14d","r14w","r14b"], ["r15","r15d","r15w","r15b"] ]
+  -- canonical key = the group's 32-bit member (index 1), or the token itself.
+  let canonReg : String → String := fun r =>
+    match regAliasGroups.find? (·.contains r) with
+    | some g => g.getD 1 r
+    | none   => r
   -- ===== Pass 2: reaching definitions / SSA — PLAUSIBLE-DRIVEN + iterative deepening =====
   let defSites := (Array.range nI).filterMap (fun i =>
     (writesRegX a insns[i]!).map (fun r => (i, r)))
@@ -226,7 +245,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         --     program order is the reaching order).
         -- (b) Otherwise the value is live-on-entry: under SysV an in-range arg
         --     register binds to its parameter name `a{k}` (a def-at-entry).
-        match (if nB == 1 then (defSites.filter (fun p => p.2 == r ∧ p.1 < j)).back? else none) with
+        match (if nB == 1 then (defSites.filter (fun p => canonReg p.2 == canonReg r ∧ p.1 < j)).back? else none) with
         | some (di, _) =>
           let nm := cName ((ssaName.get? di).getD r)
           useToVer := useToVer.insert j (((useToVer.get? j).getD []) ++ [(r, nm)])
@@ -308,7 +327,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     -- cmov result would be dropped and the bare register returned). Multi-block
     -- (`--unsafe`) keeps the dep's dominator-aware reaching def.
     if nB == 1 then
-      match (defSites.filter (fun p => p.2 == retReg ∧ p.1 < q)).back? with
+      match (defSites.filter (fun p => canonReg p.2 == canonReg retReg ∧ p.1 < q)).back? with
       | some (di, _) => cName ((ssaName.get? di).getD retReg)
       | none         => cName retReg
     else
