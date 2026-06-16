@@ -1,11 +1,13 @@
 import Flowref.Disasm
 
-/-! # flowref — ELF parser (FFI over elfutils libelf/gelf)
+/-! # flowref — ELF parser (self-contained FFI shim)
 
-A thin typed wrapper over `ffi/elf_shim.c`, which uses the system `libelf`
-(elfutils) to parse an ELF container — reusing a battle-tested parser instead of
-hand-rolling byte-poking in Lean, and mirroring the `lean-capstone` FFI pattern
-(one C primitive, TSV transport, typed wrapper here).
+A thin typed wrapper over `ffi/elf_shim.c`, which parses an ELF container
+directly using the standard `<elf.h>` struct definitions (libc header-only — no
+libelf/gelf, no library to link, no pkg-config, no runtime `.so`). Keeping the
+byte-layout knowledge in C (canonical ELF structs + bounds checks) rather than
+hand-poking offsets in Lean, and mirroring the `lean-capstone` FFI pattern (one
+C primitive, TSV transport, typed wrapper here).
 
 The shim returns a TAB-delimited, newline-separated dump:
 
@@ -28,8 +30,8 @@ that to `none`, so callers can fall back to the explicit-region path. -/
 
 namespace Flowref
 
-/-- FFI: open `path` with libelf and return the TSV dump (`""` on any error —
-not an ELF, unreadable, malformed). Pure in the same benign sense as
+/-- FFI: read+parse the ELF at `path` and return the TSV dump (`""` on any error
+— not an ELF, unreadable, malformed). Pure in the same benign sense as
 `Capstone.disasmRaw`: the file is treated as fixed for the run. -/
 @[extern "lean_elf_dump"]
 opaque elfDumpRaw (path : String) : String

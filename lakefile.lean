@@ -4,12 +4,13 @@ open Lake DSL System
 package flowref where
   -- moreLeancArgs / moreLinkArgs left default
 
-/-! ## ELF parser FFI (elfutils libelf/gelf).
-    `ffi/elf_shim.c` is C glue over the system `libelf` (elfutils): it returns a
-    TSV dump (header machine/class/endian, sections, FUNC symbols) that
-    `Flowref/Elf.lean` parses. Mirrors the lean-capstone shim pattern. The
-    `elfshim` static glue is linked transitively as an `extern_lib`; the `flowref`
-    exe additionally links the system `-lelf`. -/
+/-! ## ELF parser FFI (self-contained — no external library).
+    `ffi/elf_shim.c` parses ELF directly using the standard `<elf.h>` struct
+    definitions (libc header-only): it returns a TSV dump (header
+    machine/class/endian, sections, FUNC symbols) that `Flowref/Elf.lean` parses.
+    Mirrors the lean-capstone shim pattern. Crucially there is **no library to
+    link** — no libelf/gelf, no pkg-config, no CI package, no runtime `.so`. The
+    `elfshim` static glue is linked transitively as an `extern_lib`. -/
 
 target elfShimO pkg : FilePath := do
   let oFile := pkg.buildDir / "ffi" / "elf_shim.o"
@@ -50,11 +51,9 @@ require lean_duckdb from git
   moreLinkArgs := #[
     "-Wl,--start-group",
     ".lake/packages/lean-capstone/thirdparty/capstone/lib/libcapstone.a",
-    "-Wl,--end-group",
-    -- elfutils libelf, for the ELF parser shim (ffi/elf_shim.c). Referenced by
-    -- full path (like the capstone archive above) so we don't add a system-wide
-    -- -L that would shadow the toolchain libc. Matches `pkg-config --libs libelf`.
-    "/home/linuxbrew/.linuxbrew/lib/libelf.so"]
+    "-Wl,--end-group"]
+    -- libelf is linked by the `libelfSystem` extern_lib above (full path
+    -- discovered via pkg-config), so it needs no entry here.
 
 -- ETNF normaliser: reads Decompile-Bench rows (ndjson) and writes redundancy-free
 -- Parquet relations (zstd) via DuckDB. Links the vendored libduckdb.so (Lake does

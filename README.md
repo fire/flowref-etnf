@@ -35,7 +35,8 @@ deliberate trade-off (see *Limitations*).
 | `flowref --version` | Version string. |
 
 For ELF binaries the **arch, file offset, load address and length are read from
-the section headers + symbol table** (via `libelf`/`gelf`), so you give a symbol
+the section headers + symbol table** (a self-contained `<elf.h>` FFI shim — no
+external library), so you give a symbol
 name or a `0x` address instead of computing six hex fields by hand. Start with
 `flowref list <bin>` to see what is there. `--arch=<a>` forces the arch if the
 ELF machine is misidentified.
@@ -80,7 +81,7 @@ from:
 ```
         adapters (I/O, formats)             decoders (Decoder port)        kernel (pure)
   binary-file · decompile-bench-bins ─────▶ capstone (bytes → Ins) ─┐
-  elf-binary (libelf: symbol/addr → region)─▶ capstone ─────────────┤
+  elf-binary (elf.h shim: symbol/addr → region)─▶ capstone ─────────┤
   asm-text (string / file) ──────────────▶ objdump-asm (text → Ins)─┴─▶ Disasm · Dataflow · Emit
 ```
 
@@ -92,8 +93,9 @@ from:
   `capstoneDecoder` (machine-code bytes) and `asmDecoder` (objdump text).
 * **`SourceAdapter` port** (`Flowref/Adapters.lean`) — the *source* boundary and
   the **untrusted-input validation** layer: `binaryFileAdapter`,
-  `elfBinaryAdapter` (symbol/address → region, via `Flowref/Elf.lean` over
-  `libelf`/`gelf` — see `ffi/elf_shim.c`), `decompileBenchBinAdapter`,
+  `elfBinaryAdapter` (symbol/address → region, via `Flowref/Elf.lean` over a
+  self-contained `<elf.h>` shim — see `ffi/elf_shim.c`, no external library),
+  `decompileBenchBinAdapter`,
   `asmStringAdapter`/`asmFileAdapter`.
 
 Adding an architecture is one line in `capstoneSpec?`; adding an input format is

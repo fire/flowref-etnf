@@ -159,7 +159,7 @@ else
   echo "skip: libduckdb not vendored ($DUCKLIB) — run 'lake update lean_duckdb'"
 fi
 
-echo "== 14. ELF resolution (libelf FFI): list + symbol/address short forms =="
+echo "== 14. ELF resolution (self-contained FFI): list + symbol/address short forms =="
 # The flowref binary is itself an ELF — use it as a self-contained fixture.
 SELF="$BIN"
 # 14a. list detects arch and finds FUNC symbols.
