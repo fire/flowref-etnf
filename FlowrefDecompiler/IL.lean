@@ -261,4 +261,54 @@ theorem load_add_render (mem : Mem) (p : Word) :
     (load_add.render).evalU32M (env2 p 0) (memEnv mem) = some (load_add.eval mem [p]) := by
   simp +decide [load_add, env2, memEnv, MProg.eval, mevalGo]
 
+/-! ## Stores: memory as threaded state, with aliasing reasoning.
+
+A store mutates memory, so it is a *statement*, not a value-binding: evaluation
+now threads `(slots, mem)` state. The payoff is that `bv_decide` reasons about
+**aliasing** — proving `store_two` returns `a + b` requires knowing the two
+stored addresses `p` and `p+4` are distinct, which `bv_decide` decides. -/
+
+/-- A statement: bind a value into the next SSA slot, or store a value to memory. -/
+inductive Stmt
+  | bind  (rhs : Rhs)
+  | store (addr val : Atom)
+  deriving Repr
+
+/-- A leaf function with mutable memory. -/
+structure SProg where
+  stmts : List Stmt
+  ret   : Atom
+  deriving Repr
+
+/-- Point update of a memory at one address. -/
+@[simp] def Mem.upd (mem : Mem) (addr val : Word) : Mem := fun x => if x = addr then val else mem x
+
+/-- Thread `(slots, mem)` through the statements, then read `ret`. -/
+@[simp] def sevalGo (args : List Word) (ret : Atom) : List Stmt → List Word → Mem → Word
+  | [],                 slots, _   => ret.eval args slots
+  | .bind rhs  :: rest, slots, mem => sevalGo args ret rest (slots ++ [rhs.eval mem args slots]) mem
+  | .store a v :: rest, slots, mem => sevalGo args ret rest slots (mem.upd (a.eval args slots) (v.eval args slots))
+
+@[simp] def SProg.eval (mem : Mem) (p : SProg) (args : List Word) : Word :=
+  sevalGo args p.ret p.stmts [] mem
+
+/-- `uint32_t store_two(uint32_t* p, uint32_t a, uint32_t b){ p[0]=a; p[1]=b;
+    return p[0] + p[1]; }` — distinct addresses, so the result is `a + b`. -/
+def store_two : SProg :=
+  { stmts := [ .store (arg 0) (arg 1)          -- *p = a
+             , .bind (alu add (arg 0) (imm 4))  -- slot0 = p + 4
+             , .store (slot 0) (arg 2)          -- *(p+4) = b
+             , .bind (load (arg 0))             -- slot1 = *p
+             , .bind (load (slot 0))            -- slot2 = *(p+4)
+             , .bind (alu add (slot 1) (slot 2)) ] -- slot3 = slot1 + slot2
+  , ret := slot 3 }
+
+/-- The second store does not clobber the first read: `p ≠ p+4`, so the result is
+`a + b` for **all** memories — the no-aliasing fact is discharged by `bv_decide`. -/
+theorem store_two_correct (mem : Mem) (p a b : Word) :
+    store_two.eval mem [p, a, b] = a + b := by
+  simp only [store_two, SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply, Mem.upd,
+             List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
+  bv_decide
+
 end FlowrefDecompiler.IL
