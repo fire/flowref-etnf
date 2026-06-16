@@ -103,6 +103,12 @@ def insToS (i : Ins) : Option (List SInsn) :=
     | some (.reg dr),    some (.mem b disp) => some [.load dr b disp]        -- load
     | some (.mem b disp), some (.reg sr)    => some [.store b disp sr]       -- store
     | _, _ => none
+  | "inc", [d] =>   -- inc r ⇒ r := r + 1
+    match parseOpd d with | some (.reg r) => some [.bin r .add (.reg r) (.imm 1)] | _ => none
+  | "dec", [d] =>   -- dec r ⇒ r := r - 1
+    match parseOpd d with | some (.reg r) => some [.bin r .sub (.reg r) (.imm 1)] | _ => none
+  | "neg", [d] =>   -- neg r ⇒ r := 0 - r
+    match parseOpd d with | some (.reg r) => some [.bin r .sub (.imm 0) (.reg r)] | _ => none
   | mn, [d, s]  =>
     match binOpOf mn, parseOpd d, parseOpd s with
     | some op, some (.reg dr), some (.reg sr) => some [.bin dr op (.reg dr) (.reg sr)]
@@ -189,5 +195,24 @@ theorem liftFn_addMem_correct (mem : Mem) (p b : Word) :
   rw [liftFn_addMem_shape]
   simp only [Option.map_some, SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply,
              List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
+
+/-! ## Single-operand mnemonics: `inc` / `dec` / `neg`. -/
+
+/-- `succ(x){ return x + 1; }`: `mov eax, edi; inc eax; ret`. -/
+def succIns : List Ins :=
+  [ { addr := 0x4000, mn := "mov", ops := "eax, edi" },
+    { addr := 0x4002, mn := "inc", ops := "eax" },
+    { addr := 0x4004, mn := "ret", ops := "" } ]
+
+theorem liftFn_succ_shape :
+    liftFn ["rdi"] succIns
+      = some { stmts := [.bind (.alu .add (.arg 0) (.imm 1))], ret := .slot 0 } := by
+  native_decide
+
+theorem liftFn_succ_correct (mem : Mem) (x : Word) :
+    (liftFn ["rdi"] succIns).map (fun p => p.eval mem [x]) = some (x + 1) := by
+  rw [liftFn_succ_shape]
+  simp only [Option.map_some, SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply,
+             List.getD_cons_zero, List.nil_append]
 
 end FlowrefDecompiler.Lift
