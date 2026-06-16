@@ -77,6 +77,8 @@ def usageText : String :=
   "  --search-trace  print the iterative-deepening escalation chain to stderr\n" ++
   "  --arch=<a>      force the arch for the ELF short forms (else read from header)\n" ++
   "  --json          machine-readable output for list / decompile / xref (stdout)\n" ++
+  "  --unsafe        emit C even for non-faithful functions (loops/memory/calls),\n" ++
+  "                  with a 'NOT faithful — do not trust' banner (toggles strict off)\n" ++
   "  --help, -h      this help\n" ++
   "  --version       version string\n" ++
   "\nNOTE: decompile writes the C to stdout and all notes/traces to stderr, so\n" ++
@@ -772,6 +774,10 @@ def main (args : List String) : IO Unit := do
   let hasFlag := fun (f : String) => args.contains f
   let showTrace := hasFlag "--search-trace"
   let asJson := hasFlag "--json"
+  -- `--unsafe` toggles OFF the faithful-or-refuse strict gate: emit the lift for
+  -- non-faithful functions too (control flow / memory / calls), with the
+  -- `equivalence: NOT faithful — do not trust` banner. Use as an oracle.
+  let strict := ¬ hasFlag "--unsafe"
   -- `--arch=<tok>` forces the arch for the ELF-resolved short forms (rare:
   -- a misidentified e_machine). Otherwise the arch comes from the ELF header.
   let archOverride? := (args.find? (·.startsWith "--arch=")).map (·.drop 7 |>.toString)
@@ -798,11 +804,11 @@ def main (args : List String) : IO Unit := do
   -- ── decompile ──────────────────────────────────────────────────────────
   -- ELF short form: resolve a symbol/address to a region from the headers.
   | ["decompile", bin, target] =>
-    guard (runDecompileElf bin target archOverride? showTrace asJson)
+    guard (runDecompileElf bin target archOverride? showTrace asJson strict)
   | "decompile" :: bin :: archS :: fnS :: foS :: vaS :: lenS :: _ =>
-    guard (runDecompile (binaryFileAdapter bin archS foS vaS lenS) fnS showTrace asJson)
+    guard (runDecompile (binaryFileAdapter bin archS foS vaS lenS) fnS showTrace asJson strict)
   | "decompile-asm" :: path :: archS :: fnS :: _ =>
-    guard (runDecompile (asmFileAdapter archS path) fnS showTrace asJson)
+    guard (runDecompile (asmFileAdapter archS path) fnS showTrace asJson strict)
   -- ── xref ───────────────────────────────────────────────────────────────
   -- ELF short form: <bin> <fnSym|fnAddr> <targetHex> — region from the ELF,
   -- target is what to find references to.
@@ -827,14 +833,14 @@ where
   to stderr, then decompile that region. The function vaddr to carve is the
   resolved region's vaddr. -/
   runDecompileElf (bin target : String) (archOverride? : Option String)
-      (showTrace json : Bool) : IO Unit := do
+      (showTrace json strict : Bool) : IO Unit := do
     let r ← elfResolveRegion bin target archOverride?
     let symNote := match r.symbol with | some s => s!" ({s})" | none => ""
     -- Resolution note goes to stderr, so JSON stdout stays a single clean object.
     IO.eprintln s!"resolved{symNote}: arch={r.arch} vaddr=0x{hex r.vaddr} fileOff=0x{hex r.fileOff} len=0x{hex r.len}"
     let (a, bits, insns) ← (elfBinaryAdapter r bin).run
     if insns.isEmpty then IO.eprintln "error: empty disassembly for the resolved region"; IO.Process.exit 3
-    decompileInsns a bits insns r.vaddr showTrace json
+    decompileInsns a bits insns r.vaddr showTrace json strict
     -- PPC64 ELFv1: annotate any TOC-relative loads in this function — the `r2`
     -- base is recovered from `.opd`, then each `ld off(r2)` / `addis r2,…` site
     -- is resolved to the absolute address it references. Notes go to stderr so
@@ -893,13 +899,13 @@ where
             let line := s!"  @0x{hex w.vaddr}: {w.insn}  → 0x{hex w.resolved}"
             if json then IO.eprintln line else IO.println line
   /-- Decompile whatever a `SourceAdapter` yields to compilable C. -/
-  runDecompile (adapter : SourceAdapter) (fnS : String) (showTrace json : Bool) : IO Unit := do
+  runDecompile (adapter : SourceAdapter) (fnS : String) (showTrace json strict : Bool) : IO Unit := do
     let fnVa ← match parseImm? fnS with
       | some v => if v < 0 then throw (IO.userError s!"fnVaddr must be non-negative, got '{fnS}'") else pure v.toNat
       | none => throw (IO.userError s!"invalid fnVaddr '{fnS}' (expected hex like 0x401010 or a decimal)")
     let (a, bits, insns) ← adapter.run
     if insns.isEmpty then IO.eprintln "error: empty disassembly for the given region"; IO.Process.exit 3
-    decompileInsns a bits insns fnVa showTrace json
+    decompileInsns a bits insns fnVa showTrace json strict
   /-- The ORIGINAL behaviour: a single-target def→use witness search, now with
   iterative deepening over the CFG-walk budget, over any `SourceAdapter`. -/
   xref (adapter : SourceAdapter) (tgtS : String) (showTrace json : Bool) : IO Unit := do
