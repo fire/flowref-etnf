@@ -78,6 +78,15 @@ def tokToOperand (t : String) : Operand :=
 SSA lifter versions each write, so reusing one name across instructions is safe. -/
 def scratch : String := "__t"
 
+/-- The zero-extension mask for a sub-register source (`al`→`0xff`, `ax`→`0xffff`),
+or `none` for a full-width (32/64-bit) name. Used to model `movzx`. -/
+def subRegMask (r : String) : Option Word :=
+  match r.trimAscii.toString with
+  | "al" | "bl" | "cl" | "dl" | "sil" | "dil" | "bpl" | "spl"
+  | "ah" | "bh" | "ch" | "dh" => some 0xff
+  | "ax" | "bx" | "cx" | "dx" | "si" | "di" | "bp" | "sp" => some 0xffff
+  | _ => none
+
 /-- Lower a single decoded instruction to a *list* of `SInsn` (one x86
 instruction may expand to several IL ops, e.g. an ALU op with a memory operand
 becomes a load to a scratch register followed by the register ALU), or refuse
@@ -103,6 +112,13 @@ def insToS (i : Ins) : Option (List SInsn) :=
     | some (.reg dr),    some (.mem b disp) => some [.load dr b disp]        -- load
     | some (.mem b disp), some (.reg sr)    => some [.store b disp sr]       -- store
     | _, _ => none
+  | "movzx", [d, s] =>   -- zero-extend: mask a sub-register source, else plain move
+    match parseOpd d with
+    | some (.reg dr) =>
+      match subRegMask s with
+      | some m => some [.bin dr .band (.reg (canonReg s)) (.imm m)]
+      | none   => some [.mov dr (tokToOperand s)]
+    | _ => none
   | "inc", [d] =>   -- inc r ⇒ r := r + 1
     match parseOpd d with | some (.reg r) => some [.bin r .add (.reg r) (.imm 1)] | _ => none
   | "dec", [d] =>   -- dec r ⇒ r := r - 1
@@ -145,6 +161,18 @@ def lowerCmov (mn dst src : String) (c : String × String) : Option (List SInsn)
     some [ .bin "__cc" .ult c1 c2, .csel d (.reg "__cc") (.reg d) s ]
   else none
 
+/-- Lower `setcc r8` given the preceding `cmp`'s operands: the byte register is set
+to the boolean `(c1 < c2)`/`(c1 >= c2)` as `1`/`0` via a `csel` over the `ult`
+flag. Unsigned below/above-equal only (mirrors `lowerCmov`). -/
+def lowerSetcc (mn dst : String) (c : String × String) : Option (List SInsn) :=
+  let c1 := tokToOperand c.1; let c2 := tokToOperand c.2
+  let d  := canonReg dst
+  if mn == "setb" ∨ mn == "setc" ∨ mn == "setnae" then       -- d = (c1 < c2) ? 1 : 0
+    some [ .bin "__cc" .ult c1 c2, .csel d (.reg "__cc") (.imm 1) (.imm 0) ]
+  else if mn == "setae" ∨ mn == "setnb" ∨ mn == "setnc" then -- d = (c1 >= c2) ? 1 : 0
+    some [ .bin "__cc" .ult c1 c2, .csel d (.reg "__cc") (.imm 0) (.imm 1) ]
+  else none
+
 /-- Lower an instruction list to `SInsn`, threading the last `cmp`'s operands so
 `cmovcc` can be fused. Refuses (`none`) on an unmodelled instruction or a
 `cmovcc` with no preceding `cmp`. -/
@@ -161,6 +189,10 @@ def fuse (argRegs : List String) (cmp : Option (String × String)) : List Ins �
       -- summary `ce`, so the lift is correct for ALL callees.
       let callee := i.ops.trimAscii.toString
       (fuse argRegs none rest).map (SInsn.call callee argRegs :: ·)
+    else if i.mn.startsWith "set" then
+      match cmp, (i.ops.splitOn ",").map (·.trimAscii.toString) with
+      | some ab, [d] => (lowerSetcc i.mn d ab).bind (fun pre => (fuse argRegs none rest).map (pre ++ ·))
+      | _, _ => none
     else if i.mn.startsWith "cmov" then
       match cmp, (i.ops.splitOn ",").map (·.trimAscii.toString) with
       | some ab, [d, s] => (lowerCmov i.mn d s ab).bind (fun pre => (fuse argRegs none rest).map (pre ++ ·))
@@ -367,5 +399,36 @@ theorem liftFn_callAdd_correct (ce : CallEnv) (mem : Mem) (x : Word) :
     (liftFn ["rdi"] callAddIns).map (fun p => p.eval mem [x] ce) = some (ce "f" [x] + x) := by
   rw [liftFn_callAdd_shape]
   simp [SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply]
+
+/-! ### A comparison-returning leaf via `setcc`, lifted from real decoded `Ins`.
+
+`uint32_t lt(uint32_t a, uint32_t b){ return a < b; }` compiles (SysV) to
+`cmp edi, esi ; setb al ; movzx eax, al ; ret`. The adapter fuses the `cmp`+`setb`
+into the `ult` flag + a `csel` to `1`/`0`, and models the `movzx` as a `0xff`
+mask; the lifted program returns `(a < b) ? 1 : 0` for **all** inputs (the mask is
+identity on the `{0,1}` boolean), by `bv_decide`. This is the verified-track
+counterpart of the production `setcc` lift. -/
+def cmpLtIns : List Ins :=
+  [ { addr := 0x9000, mn := "cmp",   ops := "edi, esi" },
+    { addr := 0x9002, mn := "setb",  ops := "al" },
+    { addr := 0x9005, mn := "movzx", ops := "eax, al" },
+    { addr := 0x9008, mn := "ret",   ops := "" } ]
+
+/-- The fused lift is `s0 := (a<b); s1 := s0 ? 1 : 0; s2 := s1 & 0xff; ret s2`. -/
+theorem liftFn_cmpLt_shape :
+    liftFn ["rdi", "rsi"] cmpLtIns
+      = some { stmts := [.bind (.alu .ult (.arg 0) (.arg 1)),
+                         .bind (.sel (.slot 0) (.imm 1) (.imm 0)),
+                         .bind (.alu .band (.slot 1) (.imm 0xff))], ret := .slot 2 } := by
+  native_decide
+
+/-- Hence the lifted compare+setb+movzx computes the unsigned `(a < b)` boolean. -/
+theorem liftFn_cmpLt_correct (mem : Mem) (a b : Word) :
+    (liftFn ["rdi", "rsi"] cmpLtIns).map (fun p => p.eval mem [a, b])
+      = some (if a.ult b then 1 else 0) := by
+  rw [liftFn_cmpLt_shape]
+  simp only [Option.map_some, SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply,
+             List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
+  cases h : a.ult b <;> simp
 
 end FlowrefDecompiler.Lift
