@@ -651,4 +651,61 @@ theorem blockdevice_lock_render :
     (blockdevice_lock.render).evalU32 (fun _ => 0) = some (blockdevice_lock.eval []) := by
   simp [blockdevice_lock, Prog.eval, evalGo]
 
+/-! ## The lift bridge: decoded instructions → IL, in Lean.
+
+The remaining harness infrastructure is the *lift* from decoded instructions to
+`Prog`. Capstone produces the instruction list; this is the other half — a
+minimal but real SSA lifter for straight-line register code: track each
+register's current value-source, emit a binding per ALU op (a fresh SSA slot),
+and treat `mov` as a copy. Run on the **real** `BlockDevice::Lock()` instruction
+sequence it reproduces the hand-lift, now mechanically. Arg-register mapping and
+the `Flowref.Disasm.Ins` adapter are the next pieces; this is the core. -/
+
+/-- A decoded operand: a register name or an immediate. -/
+inductive Operand | reg (r : String) | imm (w : Word)
+  deriving Repr
+
+/-- A decoded straight-line instruction (the shape a decoder hands us). -/
+inductive LInsn
+  | mov (dst : String) (src : Operand)            -- dst := src   (copy)
+  | bin (dst : String) (op : Op) (a b : Operand)  -- dst := op a b
+  | ret (src : String)                            -- return register `src`
+  deriving Repr
+
+/-- Lifter state: register → current IL source, emitted bindings, next slot. -/
+structure LSt where
+  regs  : List (String × Atom) := []
+  binds : List Bind            := []
+  n     : Nat                  := 0
+  retA  : Atom                 := .imm 0
+
+/-- Current IL source of register `r` (unmapped ⇒ treated as immediate 0; real
+arg-register init is the next step). -/
+@[simp] def LSt.get (s : LSt) (r : String) : Atom :=
+  ((s.regs.find? (·.1 = r)).map (·.2)).getD (.imm 0)
+
+/-- Resolve an operand to an IL atom. -/
+@[simp] def LSt.opnd (s : LSt) : Operand → Atom
+  | .reg r => s.get r
+  | .imm w => .imm w
+
+/-- Lift one instruction, threading the state. -/
+@[simp] def LSt.step (s : LSt) : LInsn → LSt
+  | .mov d src    => { s with regs := (d, s.opnd src) :: s.regs }
+  | .bin d op a b => { regs := (d, .slot s.n) :: s.regs,
+                       binds := s.binds ++ [⟨op, s.opnd a, s.opnd b⟩], n := s.n + 1, retA := s.retA }
+  | .ret r        => { s with retA := s.get r }
+
+/-- Lift a decoded instruction sequence to an IL program. -/
+@[simp] def lift (is : List LInsn) : Prog :=
+  let s := is.foldl LSt.step {}
+  { binds := s.binds, ret := s.retA }
+
+/-- The real `BlockDevice::Lock()` instructions: `movb $0x1, %al; ret`. -/
+def lockInsns : List LInsn := [ .mov "al" (.imm 1), .ret "al" ]
+
+/-- The lifter mechanically reproduces the hand-lift, and the result returns `1` —
+the first real corpus function lifted by code, not by hand. -/
+theorem lift_lock_correct : (lift lockInsns).eval [] = 1 := by decide
+
 end FlowrefDecompiler.IL
