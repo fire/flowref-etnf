@@ -16,13 +16,6 @@ package «flowref-decompiler» where
 require «flowref» from git
   "https://github.com/fire/flowref" @ "main"
 
--- DuckDB binding: Parquet (+ zstd) read/write and SQL, used to normalise the
--- Decompile-Bench corpus into ETNF relations (see `Etnf.lean`). `lake update`
--- runs the dep's post_update hook, which vendors `libduckdb.so` into
--- `.lake/packages/lean_duckdb/vendor/` (linked by `flowref-etnf` below).
-require lean_duckdb from git
-  "https://github.com/v-sekai-multiplayer-fabric/lean-duckdb" @ "main"
-
 -- Slang AST + emitter + BitVec semantics (`LeanSlang.evalU32`). The decompiler's
 -- IL (`FlowrefDecompiler.IL`) renders to `LeanSlang.SlangExpr` and proves the
 -- render preserves meaning against that semantics — no compile/run oracle.
@@ -69,12 +62,8 @@ extern_lib libequivdl pkg := do
   root := `EquivCheck
   moreLinkArgs := #["-ldl"]
 
--- ETNF normaliser: reads Decompile-Bench rows (ndjson) and writes redundancy-free
--- Parquet relations (zstd) via DuckDB. Links the vendored libduckdb.so (Lake does
--- not propagate a dependency's moreLinkArgs, so we repeat them here per the
--- lean-duckdb README).
-lean_exe «flowref-etnf» where
-  root := `Etnf
-  moreLinkArgs := #[
-    "-L.lake/packages/lean_duckdb/vendor", "-lduckdb",
-    "-Wl,-rpath,$ORIGIN/../../packages/lean_duckdb/vendor"]
+-- NOTE: the ETNF normaliser (`flowref-etnf`, root `Etnf.lean`) and its DuckDB
+-- dependency were removed — it normalised the Decompile-Bench corpus to Parquet
+-- and is unrelated to decompiling; the package-wide `require lean_duckdb` forced
+-- a broken duckdb_shim build for every target. The decompiler + equiv oracle
+-- need no DuckDB. Re-add as a separate package if corpus normalisation is needed.
