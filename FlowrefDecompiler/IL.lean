@@ -707,6 +707,7 @@ inductive SInsn
   | load  (dst : String) (base : String) (disp : Word)
   | store (base : String) (disp : Word) (src : String)   -- *(base + disp) := src
   | csel  (dst : String) (cond a b : Operand)            -- dst := cond ? a : b  (cmov)
+  | call  (callee : String) (argRegs : List String)     -- rax := callee(argRegs…)
   | ret   (src : String)
   deriving Repr
 
@@ -738,6 +739,8 @@ structure SSt where
                               stmts := s.stmts ++ [.bind (.alu .add (s.get base) (.imm disp)), .store (.slot s.n) (s.get src)] }
   | .csel d cond a b => { regs := (d, .slot s.n) :: s.regs,
                           stmts := s.stmts ++ [.bind (.sel (s.opnd cond) (s.opnd a) (s.opnd b))], n := s.n + 1, retA := s.retA }
+  | .call callee argRegs => { regs := ("rax", .slot s.n) :: s.regs,        -- result in rax
+                              stmts := s.stmts ++ [.call callee (argRegs.map s.get)], n := s.n + 1, retA := s.retA }
   | .ret r         => { s with retA := s.get r }
 
 /-- Lift a decoded sequence to a statement IL program. `argRegs` seeds the
@@ -745,6 +748,16 @@ calling convention (SysV: `edi, esi, …` hold args `0, 1, …` on entry). -/
 @[simp] def liftS (argRegs : List String) (is : List SInsn) : SProg :=
   let s := is.foldl SSt.step { regs := argRegs.mapIdx (fun i r => (r, Atom.arg i)) }
   { stmts := s.stmts, ret := s.retA }
+
+/-- `uint32_t apply_f(uint32_t x){ return f(x); }`: `call f; ret` (x in rdi). The
+lifter resolves the call's arg register to its current SSA value. -/
+def applyfInsns : List SInsn := [ .call "f" ["rdi"], .ret "rax" ]
+
+/-- The lifted call computes `f(x)` for **all** callees `ce`. -/
+theorem liftS_applyf_correct (ce : CallEnv) (mem : Mem) (x : Word) :
+    (liftS ["rdi"] applyfInsns).eval mem [x] ce = ce "f" [x] := by
+  rw [show liftS ["rdi"] applyfInsns = { stmts := [.call "f" [arg 0]], ret := slot 0 } from rfl]
+  simp [SProg.eval, sevalGo, Atom.eval]
 
 /-! ### The unified lifter subsumes the earlier cases — one transform, all shapes. -/
 
