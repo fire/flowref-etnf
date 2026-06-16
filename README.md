@@ -60,14 +60,14 @@ class** plus the first compact branch-diamond return-select bridge, with
 parameters: ALU, `neg`/`not`, `movzx`/`movsx`, variable shifts,
 scaled+displaced `lea`, 1/2/3-operand `imul`, register-width aliasing, `cmp`+`cmov`
 chains of any length, add/sub-carry and `test`-ZF conditional moves, and `setcc`
-(the comparison-returning class). On the self-authored benchmark
-(`decompile-bench/algorithms/`, one function per file):
+(the comparison-returning class). On the self-authored benchmark (`decompile-bench/algorithms/*.c` plus small
+`decompile-bench/asm/*.S` branch-shape fixtures, one function per file):
 
 ```text
 $ ./decompile-bench/algo-bench.sh
   …
-  STRICT  : 42/58 proven EQUIVALENT (machine-checked)
-  UNSAFE  : 58/58 emit C that compiles (best-effort coverage signal)
+  STRICT  : 43/59 proven EQUIVALENT (machine-checked)
+  UNSAFE  : 59/59 emit C that compiles (best-effort coverage signal)
   SOUNDNESS: 0 violations (no strict lift was wrong).
 
 $ ./decompile-bench/equiv-demo.sh

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # algo-bench.sh — decompilation faithfulness on our own textbook algorithms.
 #
-# We wrote decompile-bench/algorithms/*.c (one function per file), so we own the
-# ground truth. For each file this compiles it to its own object, then reports:
+# We wrote decompile-bench/algorithms/*.c plus a few decompile-bench/asm/*.S
+# branch-shape fixtures (one function per file), so we own the ground truth. For
+# each file this compiles it to its own object, then reports:
 #   STRICT : the equivalence oracle's verdict on flowref's faithful-or-refuse
 #            lift — EQUIVALENT (proven) / INCOMPARABLE (refused, never wrong).
 #   UNSAFE : whether flowref's --unsafe best-effort C at least compiles
@@ -12,6 +13,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 FR="${FLOWREF:-$here/../.lake/build/bin/flowref-decompiler}"
 CC="${CC:-cc}"
 SRCDIR="$here/algorithms"
+ASMDIR="$here/asm"
 
 # Order mirrors the structural grouping of the source set: leaves, bit tricks /
 # multi-cmov, counted loops, data-dependent loops, then a call. Keep in sync with
@@ -20,7 +22,7 @@ FUNCS="id32 add2 umax umin abs_diff gray_code avg_floor \
        isolate_lowest_bit clear_lowest_bit clamp max3 min3 sat_add sat_sub diff_or_zero \
        parity bit_merge mul5 lin2 combine4 pack16 mul7 to_byte to_half med3 \
        to_sbyte to_shalf shift_r shift_l mul_imm addr_calc scale8 nand \
-       sel_nz is_zero cmp_lt cmp_le cmp_eq nonzero is_even in_range branch_select \
+       sel_nz is_zero cmp_lt cmp_le cmp_eq nonzero is_even in_range branch_select branch_select_slt \
        russian_mul count_divisors \
        sum_to_n factorial fib_iter popcount log2_floor reverse_bits ctz digit_count \
        gcd isqrt pow_uint is_prime collatz_steps lcm"
@@ -30,6 +32,7 @@ printf "%-15s %-14s %s\n" "function" "STRICT" "UNSAFE-compiles"
 printf "%-15s %-14s %s\n" "--------" "------" "---------------"
 for f in $FUNCS; do
   src="$SRCDIR/$f.c"
+  [ -f "$src" ] || src="$ASMDIR/$f.S"
   [ -f "$src" ] || { printf "%-15s %s\n" "$f" "(source not found)"; continue; }
   obj="$(mktemp /tmp/algo.$f.XXXXXX.o)"
   if ! "$CC" -O1 -fcf-protection=none -fno-stack-protector -c "$src" -o "$obj" 2>/dev/null; then

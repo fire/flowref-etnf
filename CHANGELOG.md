@@ -16,6 +16,9 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   libslang FFI, never the `slangc` CLI.
 - **No `objdump`.** It is denied in `.claude/settings.json`. Use flowref's own
   disassembler or `gcc -S`.
+- **Generated C contains no inline assembly.** Assembly fixtures may exist only as
+  binary-side inputs for shape coverage; flowref's converted C output must stay
+  portable C, not `asm`.
 - **CFG recovery reuses the plausible witness DAG.** Do not write new dataflow/CFG
   analysis — reuse `reachingDefsB`/`resolveReachingDef`/`certifyReaching`,
   `condBlocks`, `predOf`, and the plausible back-edge check. It works and is fast.
@@ -27,8 +30,9 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   `flowref-mvp` skill for the load-bearing core.
 - **Modeled & proven leaf/flag/select class is saturated** (every single-block
   function in the bench proven), and the first compact branch-diamond return-select
-  bridge is now strict. Strict **42/58 EQUIVALENT, 0 violations**, UNSAFE
-  58/58 compile. Modeled: ALU, neg/not, movzx/movsx (both signs), variable shifts,
+  bridge is now strict for both unsigned and signed branch predicates. Strict
+  **43/59 EQUIVALENT, 0 violations**, UNSAFE 59/59 compile. Modeled: ALU,
+  neg/not, movzx/movsx (both signs), variable shifts,
   scaled+displaced `lea`, 1/2/3-operand `imul`, register-width aliasing (canonReg),
   cmp+cmov chains of any length, add/sub-carry (CF) cmov, test-ZF cmov, and `setcc`
   (the comparison-returning class). Flag conditions share one `condFromFlags` helper
@@ -37,8 +41,10 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   `plausible` sampler with a deterministic boundary battery (sub-register/sign/
   extreme edges) + full-range random sweep. This closed a soundness blind spot that
   had passed false EQUIVALENTs for bugs only diverging at large inputs.
-- Self-authored benchmark: `decompile-bench/algorithms/<name>.c`, one function per
-  file; `algo-bench.sh` compiles each and runs the oracle.
+- Self-authored benchmark: `decompile-bench/algorithms/<name>.c` plus narrow
+  `decompile-bench/asm/<name>.S` branch-shape fixtures, one function per file;
+  `algo-bench.sh` compiles each and runs the oracle. Decompiler output remains C,
+  never inline assembly.
 
 ## Done — formal IL track (machine-checked, `bv_decide`)
 
