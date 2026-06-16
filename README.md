@@ -103,20 +103,25 @@ one new adapter — neither touches the kernel. See `Flowref/Ports.lean`.
 
 ## Proper C output
 
-`decompile` (and `--demo --emit-c`) emit a self-contained C11 translation unit:
+`decompile` (and `demo basic --emit-c`) emit a self-contained C11 translation
+unit, in a style aimed at teaching and safety-critical review (NASA/JPL *Power of
+Ten*: simple control flow, smallest-scope data):
 
 * `#include <stdint.h>` + typedefs, forward prototypes for every called
   `sub_*`, and a real `uint32_t sub_<addr>(…)` definition whose **parameter
   list is recovered from the calling convention** (see below).
-* Every SSA value is declared up front as a width-typed local
-  (`uint8_t`/`uint16_t`/`uint32_t`/`uint64_t`) with a C-legal name (`reg_version`).
+* **Values are declared where they are computed** — `uint32_t eax_0 = …;` at the
+  definition (Power-of-Ten Rule 6, smallest scope) when the value's def and uses
+  share one block/scope; cross-block / loop-carried values are declared at
+  function top. Unused declarations and labels are pruned.
 * Memory operands become real C: `*(uint32_t*)((uintptr_t)(esi + 4))`.
 * Calls become `sub_<tgt>();` (direct) or a function-pointer cast (indirect).
 * SSA φ is lowered away — there is no `φ(...)` in the output; each version is a
-  declared local and the value flows through plain assignments.
-* Control flow is **labels + `goto`** (always valid C), with conditions built
-  from the compare + branch (`if (cond_0) goto L4;`, where `cond_0` is a
-  declared, documented boolean temp).
+  local and the value flows through plain assignments.
+* **Structured control flow** (Power-of-Ten Rule 1): the plausible witness DAG —
+  the back-edge witnesses (counterexamples to the loop property, certified by
+  `plausible`) and the reaching-def witnesses — is rendered as `if` / `while` /
+  `do-while`; a labelled `goto` is used only for the irreducible remainder.
 
 ## Parameter recovery (calling conventions)
 
