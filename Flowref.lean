@@ -48,11 +48,13 @@ def usageText : String :=
   "  flowref decompile     <binary>  <arch> <fnVaddrHex> <fileOffHex> <vaddrHex> <lenHex> [--search-trace]\n" ++
   "  flowref xref          <binary>  <arch> <targetHex>  <fileOffHex> <vaddrHex> <lenHex> [--search-trace]\n" ++
   "  flowref decompile-asm <listing> <arch> <fnVaddrHex> [--search-trace]   (objdump-style .asm text)\n" ++
-  "  flowref xref-asm      <listing> <arch> <targetHex>  [--search-trace]   (objdump-style .asm text)\n" ++
-  "  flowref --demo [--emit-c] [--search-trace]\n" ++
-  "  flowref --demo-deep   (iterative-deepening escalation demonstration)\n" ++
-  "  flowref --demo-params [--emit-c]  (calling-convention parameter-model demo:\n" ++
-  "                  SysV x86-64 2-param + cdecl x86-32 1-param recovered signatures)\n" ++
+  "  flowref xref-asm      <listing> <arch> <targetHex>  [--search-trace]   (objdump-style .asm text)\n\n" ++
+  "DEMOS (built-in self-tests, no disk):\n" ++
+  "  flowref demo                          list the demos\n" ++
+  "  flowref demo basic  [--emit-c]        if + counting-loop → C\n" ++
+  "  flowref demo deep                     iterative-deepening escalation\n" ++
+  "  flowref demo params [--emit-c]        calling-convention parameter model\n\n" ++
+  "MISC:\n" ++
   "  flowref <binary> <arch> <targetHex> <fileOffHex> <vaddrHex> <lenHex>   (legacy xref)\n" ++
   "  flowref --help | -h | --version\n\n" ++
   "ARGS:\n" ++
@@ -63,17 +65,17 @@ def usageText : String :=
   "  vaddrHex    virtual/load address that fileOff maps to\n" ++
   "  lenHex      length of the region to disassemble\n\n" ++
   "FLAGS:\n" ++
-  "  --emit-c        (with --demo) print ONLY the C translation unit to stdout,\n" ++
+  "  --emit-c        (with a demo) print ONLY the C translation unit to stdout,\n" ++
   "                  so it can be piped to a compiler:\n" ++
-  "                    flowref --demo --emit-c | gcc -xc -std=c11 -w -fsyntax-only -\n" ++
+  "                    flowref demo basic --emit-c | gcc -xc -std=c11 -w -fsyntax-only -\n" ++
   "  --search-trace  print the iterative-deepening escalation chain to stderr\n" ++
   "  --arch=<a>      force the arch for the ELF short forms (else read from header)\n" ++
   "  --json          machine-readable output for list / decompile / xref (stdout)\n" ++
   "  --help, -h      this help\n" ++
+  "  --version       version string\n" ++
   "\nNOTE: decompile writes the C to stdout and all notes/traces to stderr, so\n" ++
   "  flowref decompile a.out main | gcc -xc -std=c11 -w -fsyntax-only -\n" ++
-  "works with the resolution note still shown on the terminal.\n" ++
-  "  --version       version string\n"
+  "works with the resolution note still shown on the terminal.\n"
 
 /-- Build the full compilable C translation unit for a function. Returns the C
 text plus the search trace. `verbose`/header comments are part of the C as
@@ -549,7 +551,29 @@ def demoParams (emitC? : Bool) : IO Unit := do
     let sig2 := (cdeclC.splitOn "\nuint32_t sub_401100").getLastD ""
     IO.println s!"recovered signature: uint32_t sub_401100{(sig2.splitOn ")").headD ""})"
     IO.println ""
-    IO.println "(pipe `flowref --demo-params --emit-c` to gcc to confirm it compiles)"
+    IO.println "(pipe `flowref demo params --emit-c` to gcc to confirm it compiles)"
+
+/-- The basic self-test: synthetic `if` + counting loop, no disk. With
+`emitCOnly`, print only the C translation unit (pipe to a compiler). -/
+def runDemoBasic (emitCOnly showTrace : Bool) : IO Unit := do
+  if emitCOnly then
+    let (c, trace) ← emitC .x86 .b32 demoInsns 0x1000
+    IO.print c
+    if showTrace then
+      IO.eprintln "=== iterative-deepening search trace (demo) ==="
+      for te in trace do IO.eprintln s!"  {te.query} → L{te.level}"
+  else
+    IO.println "=== synthetic disassembly (x86, base 0x1000) ==="
+    for i in demoInsns do IO.println s!"  0x{hex i.addr}: {i.mn} {i.ops}"
+    IO.println ""
+    decompileInsns .x86 .b32 demoInsns 0x1000 showTrace
+
+/-- Help for the `demo` subcommand family. -/
+def demoHelp : String :=
+  "flowref demo — built-in self-tests (no disk needed)\n\n" ++
+  "  flowref demo basic  [--emit-c] [--search-trace]   if + counting-loop → C\n" ++
+  "  flowref demo deep                                 iterative-deepening escalation\n" ++
+  "  flowref demo params [--emit-c]                    calling-convention parameter model\n"
 
 /-- `flowref list <bin>` — read the ELF and print the detected arch plus the
 FUNC symbols (name, vaddr, size). This is the discovery menu you pick from for
@@ -595,22 +619,18 @@ def main (args : List String) : IO Unit := do
   | _ =>
   if hasFlag "--help" ∨ hasFlag "-h" then IO.println usageText; return
   if hasFlag "--version" then IO.println flowrefVersion; return
+  -- Legacy `--demo*` flags kept as aliases for the `demo` subcommand.
   if hasFlag "--demo-deep" then demoDeep; return
   if hasFlag "--demo-params" then demoParams (hasFlag "--emit-c"); return
-  if hasFlag "--demo" then
-    if hasFlag "--emit-c" then
-      let (c, trace) ← emitC .x86 .b32 demoInsns 0x1000
-      IO.print c
-      if showTrace then
-        IO.eprintln "=== iterative-deepening search trace (demo) ==="
-        for te in trace do IO.eprintln s!"  {te.query} → L{te.level}"
-    else
-      IO.println "=== synthetic disassembly (x86, base 0x1000) ==="
-      for i in demoInsns do IO.println s!"  0x{hex i.addr}: {i.mn} {i.ops}"
-      IO.println ""
-      decompileInsns .x86 .b32 demoInsns 0x1000 showTrace
-    return
+  if hasFlag "--demo" then runDemoBasic (hasFlag "--emit-c") showTrace; return
   match positional with
+  -- ── demo subcommand ─────────────────────────────────────────────────────
+  | ["demo"] => IO.println demoHelp
+  | "demo" :: "basic"  :: _ => runDemoBasic (hasFlag "--emit-c") showTrace
+  | "demo" :: "deep"   :: _ => demoDeep
+  | "demo" :: "params" :: _ => demoParams (hasFlag "--emit-c")
+  | "demo" :: name :: _ =>
+    IO.eprintln s!"unknown demo '{name}' (try: basic | deep | params)"; IO.Process.exit 2
   -- ── list (ELF discovery) ────────────────────────────────────────────────
   | "list" :: bin :: _ => guard (runList bin asJson)
   -- ── decompile ──────────────────────────────────────────────────────────

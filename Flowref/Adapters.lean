@@ -32,7 +32,8 @@ private def field (name s : String) : IO Nat :=
 private def archIO (archS : String) : IO A :=
   match archOfString? archS with
   | some a => pure a
-  | none   => throw (IO.userError s!"unsupported arch '{archS}' (expected: x86 | ppc)")
+  | none   => throw (IO.userError
+      s!"unsupported arch '{archS}' (x86 | x64 | ppc | ppc64 | arm | thumb | arm64 | mips | mips64 | sparc | systemz | riscv | riscv64 | m68k | sh | bpf | wasm | … — see capstoneSpec?)")
 
 /-- The decode **width** of a Capstone `Mode`: 64-bit iff the `b64` flag is set,
 else 32-bit. (`b16` is treated as 32-bit for parameter-model purposes — there is

@@ -24,18 +24,35 @@ deliberate trade-off (see *Limitations*).
 
 | Command | What it does |
 |---|---|
-| `flowref decompile <bin> <arch> <fnVaddr> <fileOff> <vaddr> <len>` | Lift a function to compilable C. |
-| `flowref xref <bin> <arch> <target> <fileOff> <vaddr> <len>` | Find def→use witnesses reaching `target`. |
-| `flowref <bin> <arch> <target> <fileOff> <vaddr> <len>` | Legacy positional form of `xref`. |
-| `flowref --demo` | Synthetic `if` + counting-loop self-test (no disk). |
-| `flowref --demo --emit-c` | Print only the C translation unit for the demo (pipe to a compiler). |
-| `flowref --demo-deep` | Demonstrate iterative-deepening escalation. |
-| `flowref --demo-params [--emit-c]` | Demonstrate calling-convention parameter recovery (SysV x86-64 2-param + cdecl x86-32 1-param). |
+| `flowref list <bin>` | List FUNC symbols (name, vaddr, size) and the auto-detected arch. |
+| `flowref decompile <bin> <symbol\|0xVaddr>` | Lift a function to compilable C — region read from the ELF headers. |
+| `flowref xref <bin> <symbol\|0xVaddr> <target>` | Def→use witnesses for `target` over a function's region. |
+| `flowref demo` | List the built-in self-tests. |
+| `flowref demo basic [--emit-c]` | Synthetic `if` + counting-loop self-test (no disk). |
+| `flowref demo deep` | Demonstrate iterative-deepening escalation. |
+| `flowref demo params [--emit-c]` | Calling-convention parameter recovery (SysV x86-64 2-param + cdecl x86-32 1-param). |
 | `flowref --help` / `-h` | Full usage. |
 | `flowref --version` | Version string. |
 
+For ELF binaries the **arch, file offset, load address and length are read from
+the section headers + symbol table** (via `libelf`/`gelf`), so you give a symbol
+name or a `0x` address instead of computing six hex fields by hand. Start with
+`flowref list <bin>` to see what is there. `--arch=<a>` forces the arch if the
+ELF machine is misidentified.
+
+When the binary is **not an ELF** (raw blob, stripped region), use the explicit
+form, supplying the region yourself:
+
+| Command | What it does |
+|---|---|
+| `flowref decompile <bin> <arch> <fnVaddr> <fileOff> <vaddr> <len>` | Lift a function to compilable C. |
+| `flowref xref <bin> <arch> <target> <fileOff> <vaddr> <len>` | Find def→use witnesses reaching `target`. |
+| `flowref <bin> <arch> <target> <fileOff> <vaddr> <len>` | Legacy positional form of `xref`. |
+
 Add `--search-trace` to any analysis command to print the iterative-deepening
-escalation chain to stderr.
+escalation chain to stderr. Add `--json` to `list`/`decompile`/`xref` for a
+single machine-readable object on stdout (rendered via `Lean.Json`); notes and
+traces stay on stderr, so `flowref decompile a.out main --json` is pipe-clean.
 
 Two more commands ingest an **objdump-style assembly listing** directly (no
 binary), via the asm-text decoder — handy when only a listing is available:
@@ -61,9 +78,10 @@ flowref is structured so the analysis never knows where its instructions came
 from:
 
 ```
-        adapters (I/O, formats)         decoders (Decoder port)        kernel (pure)
-  binary-file · decompile-bench-bins ─▶ capstone (bytes → Ins) ─┐
-  asm-text (string / file) ──────────▶ objdump-asm (text → Ins)─┴─▶ Disasm · Dataflow · Emit
+        adapters (I/O, formats)             decoders (Decoder port)        kernel (pure)
+  binary-file · decompile-bench-bins ─────▶ capstone (bytes → Ins) ─┐
+  elf-binary (libelf: symbol/addr → region)─▶ capstone ─────────────┤
+  asm-text (string / file) ──────────────▶ objdump-asm (text → Ins)─┴─▶ Disasm · Dataflow · Emit
 ```
 
 * **Kernel** — `Flowref/Disasm.lean` (instruction model + per-arch patterns +
@@ -74,7 +92,9 @@ from:
   `capstoneDecoder` (machine-code bytes) and `asmDecoder` (objdump text).
 * **`SourceAdapter` port** (`Flowref/Adapters.lean`) — the *source* boundary and
   the **untrusted-input validation** layer: `binaryFileAdapter`,
-  `decompileBenchBinAdapter`, `asmStringAdapter`/`asmFileAdapter`.
+  `elfBinaryAdapter` (symbol/address → region, via `Flowref/Elf.lean` over
+  `libelf`/`gelf` — see `ffi/elf_shim.c`), `decompileBenchBinAdapter`,
+  `asmStringAdapter`/`asmFileAdapter`.
 
 Adding an architecture is one line in `capstoneSpec?`; adding an input format is
 one new adapter — neither touches the kernel. See `Flowref/Ports.lean`.
