@@ -192,7 +192,8 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     match writesReg arch i with
     | some r => some r
     | none   => match arch with
-                | .x86 => if (i.mn.startsWith "cmov" ∨ i.mn == "neg" ∨ i.mn == "not")
+                | .x86 => if (i.mn.startsWith "cmov" ∨ i.mn.startsWith "set"
+                               ∨ i.mn == "neg" ∨ i.mn == "not")
                                ∧ ¬ (firstTok i).any (· == '[')
                           then some (firstTok i) else none
                 | _    => none
@@ -480,46 +481,58 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     else if mn == "cmove" ∨ mn == "cmovz" then some "=="
     else if mn == "cmovne" ∨ mn == "cmovnz" then some "!="
     else none
-  -- `cmovcc dst, src` ⇒ `(X op Y) ? src : dst_prev`, with the condition from the
-  -- nearest preceding `cmp X, Y`. `dst_prev`/`src`/`X`/`Y` are SSA-substituted.
-  -- The flags a `cmovcc` consumes can come from a `cmp` (flags = X − Y) OR from a
-  -- preceding `add`/`sub` that sets CF (a carry/borrow). We model the CF cases:
-  --   add d,s  ⇒ result = d+s, CF = (result < d_old)  [unsigned carry-out]
-  --   sub d,s  ⇒            CF = (d_old < s)           [unsigned borrow]
-  -- so a CF-conditioned `cmov` (cmovc/cmovb = `<`, cmovnc/cmovae = `>=`) after add
-  -- reads as `(result < d_old) ? src : dst`. Only the unsigned `<`/`>=` cmovs are
-  -- sound off an add/sub (other suffixes also test ZF/SF/OF) — refuse the rest.
+  -- The C predicate a conditional consumes, from the nearest preceding flag-setter
+  -- before index `q` and the C op `op` derived from the condition-code suffix. The
+  -- flags can come from a `cmp` (X − Y), a `test` (X & Y, ZF only), or an `add`/`sub`
+  -- carry/borrow (CF only):
+  --   add d,s ⇒ result = d+s, CF = (result < d_old)  [unsigned carry-out]
+  --   sub d,s ⇒              CF = (d_old < s)         [unsigned borrow]
+  -- Only the soundly-modelable (setter, op) pairs return a condition; anything else
+  -- ⇒ `none` ⇒ refuse. Shared by `cmovcc` and `setcc`.
+  let condFromFlags : Nat → String → Option String := fun q op =>
+    match (List.range q).reverse.find? (fun k =>
+            let m := insns[k]!.mn; m == "cmp" ∨ m == "add" ∨ m == "sub" ∨ m == "test") with
+    | some ck =>
+      let fk := insns[ck]!
+      let csubs := (useToVer.get? ck).getD []
+      match (fk.ops.splitOn ",").map (·.trimAscii.toString) with
+      | [x, y] =>
+        if fk.mn == "cmp" then
+          some s!"{subOf csubs x} {op} {subOf csubs y}"
+        else if fk.mn == "test" then
+          -- `test x, y` sets ZF = ((x & y) == 0); only the ZF conds (==/!=) are
+          -- sound off it (it clears CF, so </>= would be wrong).
+          if op == "==" ∨ op == "!=" then
+            some s!"({subOf csubs x} & {subOf csubs y}) {op} 0"
+          else none
+        else if op == "<" ∨ op == ">=" then
+          -- CF off add/sub. `x` is the destination; its reaching read (old value)
+          -- is in `csubs`; the add's result is the SSA def at `ck`.
+          let resultSSA := cName ((ssaName.get? ck).getD x)
+          let xOld := subOf csubs x
+          if fk.mn == "add" then some s!"{resultSSA} {op} {xOld}"
+          else some s!"{xOld} {op} {subOf csubs y}"
+        else none
+      | _ => none
+    | none => none
+  -- `cmovcc dst, src` ⇒ `(cond) ? src : dst_prev`.
   let cmovRhs : Nat → Ins → List (String × String) → Option String := fun q ins subs =>
     match cmovCondOp ins.mn, (ins.ops.splitOn ",").map (·.trimAscii.toString) with
     | some op, [dst, src] =>
-      match (List.range q).reverse.find? (fun k =>
-              let m := insns[k]!.mn; m == "cmp" ∨ m == "add" ∨ m == "sub" ∨ m == "test") with
-      | some ck =>
-        let fk := insns[ck]!
-        let csubs := (useToVer.get? ck).getD []
-        let cond? : Option String :=
-          match (fk.ops.splitOn ",").map (·.trimAscii.toString) with
-          | [x, y] =>
-            if fk.mn == "cmp" then
-              some s!"{subOf csubs x} {op} {subOf csubs y}"
-            else if fk.mn == "test" then
-              -- `test x, y` sets ZF = ((x & y) == 0); only the ZF cmovs (==/!=)
-              -- are sound off it (it clears CF, so </>= would be wrong).
-              if op == "==" ∨ op == "!=" then
-                some s!"({subOf csubs x} & {subOf csubs y}) {op} 0"
-              else none
-            else if op == "<" ∨ op == ">=" then
-              -- CF off add/sub. `x` is the destination; its reaching read (old
-              -- value) is in `csubs`; the add's result is the SSA def at `ck`.
-              let resultSSA := cName ((ssaName.get? ck).getD x)
-              let xOld := subOf csubs x
-              if fk.mn == "add" then some s!"{resultSSA} {op} {xOld}"
-              else some s!"{xOld} {op} {subOf csubs y}"
-            else none
-          | _ => none
-        cond?.map (fun c => s!"({c}) ? ({subOf subs src}) : ({subOf subs dst})")
-      | none => none
+      (condFromFlags q op).map (fun c => s!"({c}) ? ({subOf subs src}) : ({subOf subs dst})")
     | _, _ => none
+  -- C comparison operator for a `setcc` suffix (same flag semantics as `cmovcc`).
+  let setCondOp : String → Option String := fun mn =>
+    if mn == "setb" ∨ mn == "setnae" ∨ mn == "setc" then some "<"
+    else if mn == "setae" ∨ mn == "setnb" ∨ mn == "setnc" then some ">="
+    else if mn == "setbe" ∨ mn == "setna" then some "<="
+    else if mn == "seta" ∨ mn == "setnbe" then some ">"
+    else if mn == "sete" ∨ mn == "setz" then some "=="
+    else if mn == "setne" ∨ mn == "setnz" then some "!="
+    else none
+  -- `setcc r8` ⇒ `r8 := (cond) ? 1 : 0` (a 0/1 byte, typically widened by `movzx`).
+  let setccRhs : Nat → Ins → Option String := fun q ins =>
+    (setCondOp ins.mn).bind (fun op => (condFromFlags q op).map (fun c => s!"({c}) ? 1 : 0"))
 
   let stmtOf : Nat → Option String := fun (q : Nat) =>
     let ins := insns[q]!
@@ -536,6 +549,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         if okLocal nm then
           let subs := (useToVer.get? q).getD []
           let rhs := if ins.mn.startsWith "cmov" then (cmovRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
+                     else if ins.mn.startsWith "set" then (setccRhs q ins).getD (applyCdecl (renderExprC a ins subs))
                      else applyCdecl (renderExprC a ins subs)
           -- declare-at-definition; the declared type does the truncation a cast did.
           if inlineDef.contains nm then some s!"{regCType r} {nm} = {rhs};"
@@ -666,7 +680,8 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   let modeledX86 : String → Bool := fun mn =>
     ["mov", "movsxd", "movzx", "movsx", "lea", "add", "sub", "and", "or", "xor",
      "shl", "sal", "shr", "sar", "imul", "neg", "not", "inc", "dec",
-     "ret", "nop", "endbr64", "cmp", "test"].contains mn ∨ (cmovCondOp mn).isSome
+     "ret", "nop", "endbr64", "cmp", "test"].contains mn
+    ∨ (cmovCondOp mn).isSome ∨ (setCondOp mn).isSome
   -- A conditional move is faithful ONLY if `cmovRhs` can actually build its
   -- condition (a preceding `cmp`, or a CF-setting `add`/`sub` for an unsigned
   -- cmov). Tying the gate to `cmovRhs.isSome` keeps emitter and gate in lockstep:
@@ -674,13 +689,18 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   let cmovsModeled := (Array.range nI).all (fun q =>
     ¬ insns[q]!.mn.startsWith "cmov" ∨
       (cmovRhs q insns[q]! ((useToVer.get? q).getD [])).isSome)
+  -- Likewise every `setcc` must resolve to a `(cond) ? 1 : 0` (a modeled suffix
+  -- with a resolvable flag source); an unmodeled set* (setg/setl/sets/setp …) or
+  -- a setcc with no preceding flag-setter ⇒ refuse.
+  let setccModeled := (Array.range nI).all (fun q =>
+    ¬ insns[q]!.mn.startsWith "set" ∨ (setccRhs q insns[q]!).isSome)
   -- At most ONE cmov: with two cmovs (clamp, max3) the first cmov's result feeds
   -- the second `cmp`, but `cmovRhs` resolves that operand via the cmov-blind
   -- reaching-def and picks the wrong SSA value. Refuse multi-cmov until the
   -- reaching-def search is cmov-aware for cmp operands too.
   let cmovCount := (insns.filter (fun i => i.mn.startsWith "cmov")).size
   let allModeled := a != .x86 ∨
-    (insns.all (fun i => modeledX86 i.mn) ∧ cmovsModeled ∧ cmovCount ≤ 2)
+    (insns.all (fun i => modeledX86 i.mn) ∧ cmovsModeled ∧ setccModeled ∧ cmovCount ≤ 2)
   let faithful := nB == 1 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧ allModeled
   let mut out : String := cPreamble
   out := out ++ s!"\n/* flowref decompile @ 0x{hex fnVa} — {nI} insns, {nB} blocks, {defSites.size} SSA defs\n"
