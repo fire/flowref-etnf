@@ -20,7 +20,8 @@ FUNCS="id32 add2 umax umin abs_diff gray_code avg_floor \
        isolate_lowest_bit clear_lowest_bit clamp max3 min3 sat_add sat_sub diff_or_zero \
        parity bit_merge mul5 lin2 combine4 pack16 mul7 to_byte to_half med3 \
        to_sbyte to_shalf shift_r shift_l mul_imm addr_calc scale8 nand \
-       sel_nz is_zero cmp_lt cmp_le cmp_eq nonzero \
+       sel_nz is_zero cmp_lt cmp_le cmp_eq nonzero is_even in_range \
+       russian_mul count_divisors \
        sum_to_n factorial fib_iter popcount log2_floor reverse_bits ctz digit_count \
        gcd isqrt pow_uint is_prime collatz_steps lcm"
 
