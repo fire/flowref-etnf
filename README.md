@@ -44,21 +44,41 @@ pass them explicitly: `flowref decompile <bin> <arch> <fnVaddr> <fileOff> <vaddr
 ## Equivalence
 
 The goal is C that is both type-correct *and* returns the same value as the
-original. This is **checked, not asserted**: the oracle `decompile-bench/equiv.sh`
-compiles, links and *runs* the lifted C against the reference source and compares
-return values.
+original. This is **checked, not asserted** — and the **binary is the reference**,
+not the source. The oracle (`flowref-equiv`, driven by `decompile-bench/equiv.sh`)
+maps the function's raw bytes into executable memory and runs them directly,
+compiles flowref's lifted C into a shared object, and compares the two over a
+**deterministic boundary battery** (sub-register, sign and extreme edges —
+0/255/256/0x7fffffff/0xffffffff, single-axis + diagonal + pairwise) followed by a
+full-range random sweep. A divergence is the disproof (`NOT-EQUIVALENT`); its
+absence is the witness (`EQUIVALENT`); anything unliftable is `INCOMPARABLE`,
+never a false pass. (The earlier size-biased `plausible` sampler missed bugs that
+only diverge at large inputs — see `TOMBSTONES.md`.)
 
-What is proven **today**: parameterless, register-only **leaf** functions. The
-bundled demo proves 4/4 —
+What is proven **today** is the whole **single-basic-block leaf/flag/select
+class**, with parameters: ALU, `neg`/`not`, `movzx`/`movsx`, variable shifts,
+scaled+displaced `lea`, 1/2/3-operand `imul`, register-width aliasing, `cmp`+`cmov`
+chains of any length, add/sub-carry and `test`-ZF conditional moves, and `setcc`
+(the comparison-returning class). On the self-authored benchmark
+(`decompile-bench/algorithms/`, one function per file):
 
 ```text
-$ decompile-bench/equiv-demo.sh
-  k7     … EQUIVALENT  (both return 7)
-  kshift … EQUIVALENT  (both return 16)
-  kxor   … EQUIVALENT  (both return 240)
-  kchain … EQUIVALENT  (both return 12)
-  RESULT: 4/4 proven functionally equivalent to their source.
+$ ./decompile-bench/algo-bench.sh
+  …
+  STRICT  : 41/57 proven EQUIVALENT (machine-checked)
+  UNSAFE  : 57/57 emit C that compiles (best-effort coverage signal)
+  SOUNDNESS: 0 violations (no strict lift was wrong).
+
+$ ./decompile-bench/equiv-demo.sh
+  RESULT: 11/11 proven functionally equivalent to their source.
 ```
+
+A parallel **formal track** proves equivalence *as a theorem* rather than by the
+differential oracle: a `BitVec 32` SSA IL (`FlowrefDecompiler/IL.lean`) discharged
+by `bv_decide`, lifted from real decoded instructions
+(`FlowrefDecompiler/Lift.lean`) and rendered meaning-preservingly to
+[lean-slang](https://github.com/V-Sekai-fire/lean-slang) — which also compiles the
+emitted shader to **SPIR-V in-process** and proves data-parallel kernel correctness.
 
 Faithful C is the **bar, not a bonus.** `flowref decompile` emits C **only** for
 the class it can lift exactly — a straight-line, register-only leaf. For anything
@@ -99,7 +119,7 @@ lake build
 ```
 
 `lake build` produces `.lake/build/bin/flowref-decompiler` (the CLI shown above)
-plus `flowref-equiv` (the oracle) and `flowref-etnf` (the corpus normaliser).
+and `flowref-equiv` (the equivalence oracle).
 
 ELF parsing is a self-contained `<elf.h>` shim — no external library to install —
 and now ships inside the [`fire/flowref`](https://github.com/fire/flowref)
@@ -107,13 +127,15 @@ dependency rather than this repo.
 
 ## Limitations
 
-Faithful output is the standard; today flowref *meets* it only for straight-line,
-register-only leaf functions (equivalence proven 4/4). Everything else — control
-flow, memory, calls, parameters beyond simple register args, float/struct/varargs
-ABI — is an **open gap, not a finished feature**, and `decompile` refuses it with
-a hard error rather than emit something unverified. `xref` and `list` still work
-on any binary. Closing these gaps (so more functions lift *faithfully*, not just
-*compilably*) is the roadmap; see `decompile-bench/README.md`.
+Faithful output is the standard. Today flowref *meets* it for the entire
+**single-basic-block** leaf/flag/select class (above) — every such function in the
+benchmark lifts and is proven. Everything with real **control flow** (branches,
+loops), **memory**, or **calls** is an **open gap, not a finished feature**, and
+`decompile` refuses it with a hard error rather than emit something unverified.
+`xref` and `list` still work on any binary. The live edge — what is being modeled
+next and why — is tracked in `OPEN_GAPS.md` (current #1: branch→select lifting,
+reusing the plausible witness DAG); completed work and durable rules are in
+`CHANGELOG.md`, and abandoned approaches in `TOMBSTONES.md`.
 
 ## License
 
