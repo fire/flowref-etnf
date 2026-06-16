@@ -141,9 +141,9 @@ echo "== 12. Decompile-Bench equivalence oracle (return-SSA wiring) =="
 if "$GCC" -O1 -fcf-protection=none -c -xc /dev/null -o /tmp/flowref-cc-probe.o 2>/dev/null; then
   rm -f /tmp/flowref-cc-probe.o
   ./decompile-bench/equiv-demo.sh | tee /tmp/flowref-equiv.out
-  grep -q "RESULT: 4/4 proven" /tmp/flowref-equiv.out || fail "equivalence demo regressed"
+  grep -q "RESULT: 11/11 proven" /tmp/flowref-equiv.out || fail "equivalence demo regressed"
   rm -f /tmp/flowref-equiv.out
-  pass "flowref C proven functionally equivalent to source (4/4 leaf functions)"
+  pass "flowref C proven equivalent to source via plausible search (11/11: constants + parameterised arithmetic)"
 else
   echo "skip: C compiler cannot build the equivalence demo"
 fi

@@ -97,22 +97,30 @@ literal is passed through (normalising `0x` is already C-legal); anything else
 is wrapped so it cannot break parsing. `subs` maps a raw register to its SSA
 name (e.g. `esi` → `esi_0`). -/
 def renderExprC (a : A) (i : Ins) (subs : List (String × String)) : String :=
-  -- start from the textual RHS, then substitute register reads with SSA locals
-  -- and lower any memory operand to a C dereference.
-  let raw := rhsText a i
-  if hasMem i.ops then
-    -- opaque load/store source: render the memory operand directly as C.
-    memToC i.ops
-  else
-    -- substitute longest register names first to avoid partial overlaps.
+  -- Substitute register reads with their SSA locals (longest name first to avoid
+  -- partial overlaps). Shared by the register and `lea`-address paths.
+  let subst := fun (s : String) =>
     let regSubs := (subs.filter (fun (rg, _) => ¬ rg.startsWith "0x")).toArray.qsort
                      (fun x y => x.1.length > y.1.length) |>.toList
-    let replaced := regSubs.foldl (fun (acc : String) (p : String × String) =>
+    regSubs.foldl (fun (acc : String) (p : String × String) =>
       let (rg, nm) := p
-      String.intercalate nm (acc.splitOn rg)) raw
-    -- The result may still contain bare registers with no SSA def (arguments);
-    -- those are declared as locals too, so the text stays C-legal as long as it
-    -- is alphanumerics/operators. Guard: if it still has a '[' it's a mem expr.
+      String.intercalate nm (acc.splitOn rg)) s
+  let raw := rhsText a i
+  if i.mn == "lea" then
+    -- `lea dst, [expr]` computes the ADDRESS `expr` — it is register arithmetic,
+    -- NOT a memory load. Emit the bracket contents with registers substituted
+    -- (e.g. `lea eax, [rdi + rsi]` → `(a0 + a1)`), never a dereference.
+    let inner := ((i.ops.splitOn "[").drop 1 |>.headD "").splitOn "]" |>.headD ""
+    let inner := (stripPtrKw inner).trimAscii.toString
+    let body := if inner.isEmpty then subst raw else subst inner
+    s!"({body})"
+  else if hasMem i.ops then
+    -- a genuine load/store source: render the memory operand as a C dereference.
+    memToC i.ops
+  else
+    let replaced := subst raw
+    -- A bare register with no SSA def (an argument) stays as a declared local;
+    -- the text is C-legal. Guard: a stray '[' would mean a mem expr.
     if hasMem replaced then memToC replaced else replaced
 
 /-- Does `name` occur in `body` as a whole identifier (bordered by non-identifier

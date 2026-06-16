@@ -530,7 +530,10 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- equivalence oracle proves it. Anything else is NOT faithfully liftable yet —
   -- the caller refuses to print it as if it were correct (see `decompileInsns`).
   let hasCall := insns.any (fun i => i.mn == "call" ∨ (a == .ppc ∧ (i.mn == "bl" ∨ i.mn == "bctrl")))
-  let hasMemOp := insns.any (fun i => hasMem i.ops)
+  -- `lea` carries `[...]` syntax but performs address arithmetic, not a memory
+  -- access — it does not disqualify a function from the faithful (register-only)
+  -- class. Any other `[...]` operand is a real load/store.
+  let hasMemOp := insns.any (fun i => i.mn != "lea" ∧ hasMem i.ops)
   let faithful := nB == 1 ∧ ¬ hasCall ∧ ¬ hasMemOp
   let mut out : String := cPreamble
   out := out ++ s!"\n/* flowref decompile @ 0x{hex fnVa} — {nI} insns, {nB} blocks, {defSites.size} SSA defs\n"
