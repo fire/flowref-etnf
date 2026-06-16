@@ -549,6 +549,18 @@ theorem callDouble_correct (ce : CallEnv) (mem : Mem) (x : Word) :
              List.nil_append, List.cons_append]
   bv_decide
 
+/-- render-correctness for calls: the emitted Slang statement body (with `call`
+expressions) means exactly `callDouble.eval`, for **all** callees — proved
+against `LeanSlang.evalStmtsU32F` (the `CallEnv` reused as the Slang `FEnv`). -/
+theorem callDouble_render (ce : CallEnv) (mem : Mem) (x : Word) :
+    evalStmtsU32F (fun n => if n = "a0" then x else 0) ce (callDouble.render)
+      = some (callDouble.eval mem [x] ce) := by
+  simp +decide only [callDouble, SProg.render, srenderGo, Rhs.toSlangS, Atom.toSlangS, slotName,
+             argName, evalStmtsU32F, SlangExpr.evalU32F, UEnv.set, binOpU32, Op.slangOp,
+             SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply, List.map_cons, List.map_nil,
+             List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append,
+             if_true, if_false]
+
 /-! ## Function calls: the ~87% unlock, callee as an uninterpreted summary.
 
 The corpus measurement found ~87% of real functions *call* another — the single
