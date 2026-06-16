@@ -463,16 +463,36 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     else none
   -- `cmovcc dst, src` ⇒ `(X op Y) ? src : dst_prev`, with the condition from the
   -- nearest preceding `cmp X, Y`. `dst_prev`/`src`/`X`/`Y` are SSA-substituted.
+  -- The flags a `cmovcc` consumes can come from a `cmp` (flags = X − Y) OR from a
+  -- preceding `add`/`sub` that sets CF (a carry/borrow). We model the CF cases:
+  --   add d,s  ⇒ result = d+s, CF = (result < d_old)  [unsigned carry-out]
+  --   sub d,s  ⇒            CF = (d_old < s)           [unsigned borrow]
+  -- so a CF-conditioned `cmov` (cmovc/cmovb = `<`, cmovnc/cmovae = `>=`) after add
+  -- reads as `(result < d_old) ? src : dst`. Only the unsigned `<`/`>=` cmovs are
+  -- sound off an add/sub (other suffixes also test ZF/SF/OF) — refuse the rest.
   let cmovRhs : Nat → Ins → List (String × String) → Option String := fun q ins subs =>
     match cmovCondOp ins.mn, (ins.ops.splitOn ",").map (·.trimAscii.toString) with
     | some op, [dst, src] =>
-      match (List.range q).reverse.find? (fun k => insns[k]!.mn == "cmp") with
+      match (List.range q).reverse.find? (fun k =>
+              let m := insns[k]!.mn; m == "cmp" ∨ m == "add" ∨ m == "sub") with
       | some ck =>
-        match (insns[ck]!.ops.splitOn ",").map (·.trimAscii.toString) with
-        | [x, y] =>
-          let csubs := (useToVer.get? ck).getD []
-          some s!"({subOf csubs x} {op} {subOf csubs y}) ? ({subOf subs src}) : ({subOf subs dst})"
-        | _ => none
+        let fk := insns[ck]!
+        let csubs := (useToVer.get? ck).getD []
+        let cond? : Option String :=
+          match (fk.ops.splitOn ",").map (·.trimAscii.toString) with
+          | [x, y] =>
+            if fk.mn == "cmp" then
+              some s!"{subOf csubs x} {op} {subOf csubs y}"
+            else if op == "<" ∨ op == ">=" then
+              -- CF off add/sub. `x` is the destination; its reaching read (old
+              -- value) is in `csubs`; the add's result is the SSA def at `ck`.
+              let resultSSA := cName ((ssaName.get? ck).getD x)
+              let xOld := subOf csubs x
+              if fk.mn == "add" then some s!"{resultSSA} {op} {xOld}"
+              else some s!"{xOld} {op} {subOf csubs y}"
+            else none
+          | _ => none
+        cond?.map (fun c => s!"({c}) ? ({subOf subs src}) : ({subOf subs dst})")
       | none => none
     | _, _ => none
 
@@ -622,18 +642,20 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     ["mov", "movsxd", "movzx", "movsx", "lea", "add", "sub", "and", "or", "xor",
      "shl", "sal", "shr", "sar", "imul", "neg", "not", "inc", "dec",
      "ret", "nop", "endbr64", "cmp", "test"].contains mn ∨ (cmovCondOp mn).isSome
-  -- A conditional move is faithful ONLY if it has a preceding `cmp` to source its
-  -- condition; otherwise refuse (cmovRhs would have no condition).
-  let cmovsHaveCmp := (Array.range nI).all (fun q =>
+  -- A conditional move is faithful ONLY if `cmovRhs` can actually build its
+  -- condition (a preceding `cmp`, or a CF-setting `add`/`sub` for an unsigned
+  -- cmov). Tying the gate to `cmovRhs.isSome` keeps emitter and gate in lockstep:
+  -- anything the emitter cannot lower to a real ternary is refused, not guessed.
+  let cmovsModeled := (Array.range nI).all (fun q =>
     ¬ insns[q]!.mn.startsWith "cmov" ∨
-      ((List.range q).any (fun k => insns[k]!.mn == "cmp")))
+      (cmovRhs q insns[q]! ((useToVer.get? q).getD [])).isSome)
   -- At most ONE cmov: with two cmovs (clamp, max3) the first cmov's result feeds
   -- the second `cmp`, but `cmovRhs` resolves that operand via the cmov-blind
   -- reaching-def and picks the wrong SSA value. Refuse multi-cmov until the
   -- reaching-def search is cmov-aware for cmp operands too.
   let cmovCount := (insns.filter (fun i => i.mn.startsWith "cmov")).size
   let allModeled := a != .x86 ∨
-    (insns.all (fun i => modeledX86 i.mn) ∧ cmovsHaveCmp ∧ cmovCount ≤ 2)
+    (insns.all (fun i => modeledX86 i.mn) ∧ cmovsModeled ∧ cmovCount ≤ 2)
   let faithful := nB == 1 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧ allModeled
   let mut out : String := cPreamble
   out := out ++ s!"\n/* flowref decompile @ 0x{hex fnVa} — {nI} insns, {nB} blocks, {defSites.size} SSA defs\n"
