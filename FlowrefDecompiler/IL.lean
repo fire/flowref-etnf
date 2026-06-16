@@ -696,9 +696,10 @@ arg-register init is the next step). -/
                        binds := s.binds ++ [⟨op, s.opnd a, s.opnd b⟩], n := s.n + 1, retA := s.retA }
   | .ret r        => { s with retA := s.get r }
 
-/-- Lift a decoded instruction sequence to an IL program. -/
-@[simp] def lift (is : List LInsn) : Prog :=
-  let s := is.foldl LSt.step {}
+/-- Lift a decoded sequence to an IL program. `argRegs` seeds the calling
+convention: the i-th register holds argument `i` on entry (SysV: `edi, esi, …`). -/
+@[simp] def lift (argRegs : List String) (is : List LInsn) : Prog :=
+  let s := is.foldl LSt.step { regs := argRegs.mapIdx (fun i r => (r, Atom.arg i)) }
   { binds := s.binds, ret := s.retA }
 
 /-- The real `BlockDevice::Lock()` instructions: `movb $0x1, %al; ret`. -/
@@ -706,6 +707,16 @@ def lockInsns : List LInsn := [ .mov "al" (.imm 1), .ret "al" ]
 
 /-- The lifter mechanically reproduces the hand-lift, and the result returns `1` —
 the first real corpus function lifted by code, not by hand. -/
-theorem lift_lock_correct : (lift lockInsns).eval [] = 1 := by decide
+theorem lift_lock_correct : (lift [] lockInsns).eval [] = 1 := by decide
+
+/-- The canonical SysV compilation of `uint32_t add(uint32_t a, uint32_t b){
+    return a + b; }`: `mov %edi, %eax; add %esi, %eax; ret`. -/
+def addInsns : List LInsn :=
+  [ .mov "eax" (.reg "edi"), .bin "eax" add (.reg "eax") (.reg "esi"), .ret "eax" ]
+
+/-- With arg-register seeding, the lifter recovers `a + b` for **all** `a, b` —
+a two-argument function lifted from its instructions and proved by `bv_decide`. -/
+theorem lift_add_correct (a b : Word) : (lift ["edi", "esi"] addInsns).eval [a, b] = a + b := by
+  rw [show lift ["edi", "esi"] addInsns = p_add from rfl]; exact p_add_correct a b
 
 end FlowrefDecompiler.IL
