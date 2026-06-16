@@ -774,4 +774,66 @@ theorem liftM_deref_correct (mem : Mem) (p : Word) :
   rw [show liftM ["rdi"] derefInsns = { binds := [Rhs.load (arg 0)], ret := slot 0 } from rfl]
   simp [MProg.eval, mevalGo, Rhs.eval, Atom.eval]
 
+/-! ### Lifting stores → the statement IL (`SProg`).
+
+Stores are statements, so the store-capable lifter targets `SProg`. A
+`store disp(base), src` lifts to a `Stmt.store` (with an address-compute bind
+first when `disp ≠ 0`). Run on `store_load(p,v){ *p=v; return *p; }` it produces
+a store followed by a read-back, which provably returns the stored value `v`. -/
+
+/-- A decoded instruction including stores. -/
+inductive SInsn
+  | mov   (dst : String) (src : Operand)
+  | bin   (dst : String) (op : Op) (a b : Operand)
+  | load  (dst : String) (base : String) (disp : Word)
+  | store (base : String) (disp : Word) (src : String)   -- *(base + disp) := src
+  | ret   (src : String)
+  deriving Repr
+
+/-- Store-capable lifter state: register map, emitted statements, next slot. -/
+structure SSt where
+  regs  : List (String × Atom) := []
+  stmts : List Stmt            := []
+  n     : Nat                  := 0
+  retA  : Atom                 := .imm 0
+
+@[simp] def SSt.get (s : SSt) (r : String) : Atom :=
+  ((s.regs.find? (·.1 = r)).map (·.2)).getD (.imm 0)
+
+@[simp] def SSt.opnd (s : SSt) : Operand → Atom
+  | .reg r => s.get r
+  | .imm w => .imm w
+
+@[simp] def SSt.step (s : SSt) : SInsn → SSt
+  | .mov d src     => { s with regs := (d, s.opnd src) :: s.regs }
+  | .bin d op a b  => { regs := (d, .slot s.n) :: s.regs,
+                        stmts := s.stmts ++ [.bind (.alu op (s.opnd a) (s.opnd b))], n := s.n + 1, retA := s.retA }
+  | .load d base 0 => { regs := (d, .slot s.n) :: s.regs,
+                        stmts := s.stmts ++ [.bind (.load (s.get base))], n := s.n + 1, retA := s.retA }
+  | .load d base disp => { regs := (d, .slot (s.n + 1)) :: s.regs,
+                           stmts := s.stmts ++ [.bind (.alu .add (s.get base) (.imm disp)), .bind (.load (.slot s.n))],
+                           n := s.n + 2, retA := s.retA }
+  | .store base 0 src => { s with stmts := s.stmts ++ [.store (s.get base) (s.get src)] }
+  | .store base disp src => { regs := s.regs, retA := s.retA, n := s.n + 1,
+                              stmts := s.stmts ++ [.bind (.alu .add (s.get base) (.imm disp)), .store (.slot s.n) (s.get src)] }
+  | .ret r         => { s with retA := s.get r }
+
+/-- Lift a sequence with stores to a statement IL program. -/
+@[simp] def liftS (argRegs : List String) (is : List SInsn) : SProg :=
+  let s := is.foldl SSt.step { regs := argRegs.mapIdx (fun i r => (r, Atom.arg i)) }
+  { stmts := s.stmts, ret := s.retA }
+
+/-- `uint32_t store_load(uint32_t* p, uint32_t v){ *p = v; return *p; }`. -/
+def storeLoadInsns : List SInsn := [ .store "rdi" 0 "esi", .load "eax" "rdi" 0, .ret "eax" ]
+
+/-- The lifted store-then-read-back returns the stored value `v`, for **all**
+prior memories — read-after-write closed by `bv_decide`. -/
+theorem liftS_storeLoad_correct (mem : Mem) (p v : Word) :
+    (liftS ["rdi", "esi"] storeLoadInsns).eval mem [p, v] = v := by
+  rw [show liftS ["rdi", "esi"] storeLoadInsns
+        = { stmts := [.store (arg 0) (arg 1), .bind (.load (arg 0))], ret := slot 0 } from rfl]
+  simp only [SProg.eval, sevalGo, Rhs.eval, Atom.eval, Mem.upd,
+             List.getD_cons_zero, List.getD_cons_succ, List.nil_append]
+  bv_decide
+
 end FlowrefDecompiler.IL
