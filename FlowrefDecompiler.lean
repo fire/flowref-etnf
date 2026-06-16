@@ -541,7 +541,19 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- access — it does not disqualify a function from the faithful (register-only)
   -- class. Any other `[...]` operand is a real load/store.
   let hasMemOp := insns.any (fun i => i.mn != "lea" ∧ hasMem i.ops)
-  let faithful := nB == 1 ∧ ¬ hasCall ∧ ¬ hasMemOp
+  -- Structure isn't enough: the lift is exact only for instructions the emitter
+  -- actually MODELS. A flag-based value op (cmp+cmov, setcc) is straight-line and
+  -- register-only, so it passes the structural checks above — but the emitter does
+  -- not model it and would silently emit WRONG C under a "faithful" banner. So
+  -- require every x86 instruction to be in the modeled set; refuse otherwise
+  -- (cmov*, setcc*, cmp, test, div, …). Found by decompile-bench/algo-bench.sh
+  -- (umax/umin were mis-lifted before this gate).
+  let modeledX86 : String → Bool := fun mn =>
+    ["mov", "movsxd", "movzx", "movsx", "lea", "add", "sub", "and", "or", "xor",
+     "shl", "sal", "shr", "sar", "imul", "neg", "not", "inc", "dec",
+     "ret", "nop", "endbr64"].contains mn
+  let allModeled := a != .x86 ∨ insns.all (fun i => modeledX86 i.mn)
+  let faithful := nB == 1 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧ allModeled
   let mut out : String := cPreamble
   out := out ++ s!"\n/* flowref decompile @ 0x{hex fnVa} — {nI} insns, {nB} blocks, {defSites.size} SSA defs\n"
   out := out ++ s!"   loops (plausible back-edge: {loopRes.isFailure}): {loopHeaders}; conditionals: {condBlocks}\n"
