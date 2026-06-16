@@ -442,4 +442,27 @@ theorem times8_render (x : Word) :
     (times8.render).evalU32 (env2 x 0) = some (times8.eval [x]) := by
   simp +decide [times8, env2, Prog.eval, evalGo]
 
+/-! ## Symbolic-bound loops: correctness by induction (beyond bv_decide).
+
+A loop whose trip count `n` is a runtime value cannot be unrolled, so `bv_decide`
+— which bitblasts a *finite* term — cannot close it. The honest technique is to
+state a loop invariant and prove it by induction on `n`; the per-iteration
+arithmetic is still discharged automatically (here by `bv_omega`). This is a
+different, necessary regime from the finite fragment above, and we label it as
+such rather than pretend `bv_decide` reaches it. -/
+
+/-- `uint32_t addn(uint32_t x, uint32_t n){ for (i=0;i<n;i++) x += 1; return x; }`,
+modelled as a fold over the runtime trip count `n`. -/
+def addLoop : Nat → Word → Word
+  | 0,     x => x
+  | n + 1, x => addLoop n x + 1
+
+/-- The loop adds `n` to `x`, for **all** trip counts `n` and inputs `x` — proved
+by induction on the symbolic `n`, the step closed by `bv_omega`. Not `bv_decide`:
+`n` is unbounded, so the term is not finite. -/
+theorem addLoop_correct (n : Nat) (x : Word) : addLoop n x = x + BitVec.ofNat 32 n := by
+  induction n with
+  | zero => simp [addLoop]
+  | succ k ih => rw [addLoop, ih]; bv_omega
+
 end FlowrefDecompiler.IL
